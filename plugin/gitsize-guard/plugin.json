@@ -1,0 +1,19 @@
+{
+  "name": "gitsize-guard",
+  "version": "0.1.0",
+  "description": "Analyzes proposed file changes for their impact on Git repository storage and blocks or warns before oversized files get committed.",
+  "author": "ratuhin1122",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_DIR}/hooks/pretooluse-gitsize.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

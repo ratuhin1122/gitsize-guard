@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Claude Code PreToolUse Hook - gitsize-guard
+# Claude Code PreToolUse Hook - gitsize-guard (Plugin Distribution)
+#
+# Binary Resolution Order:
+#   1. GITSIZE_BIN environment variable (if explicitly set)
+#   2. bin/gitsize (or bin/gitsize.exe) inside the plugin directory
+#      (resolved via ${CLAUDE_PLUGIN_DIR}/bin or dirname "$0"/../bin)
+#   3. Fall back to "gitsize" on PATH
 #
 # Exit Code Contract:
 #   0 = Allow (proceed with tool execution)
 #   2 = Block tool execution and provide feedback from stderr to Claude Code
 #
-# This hook intercepts Write, Edit, and Bash (git add/commit) operations to
-# guard against committing oversized files or introducing bloat into the git
 # Note:
-#   This file is the "manual install" option. For the Claude Code plugin
-#   distribution, see plugin/gitsize-guard/ instead.
+#   This script is part of the "plugin install" distribution located in
+#   plugin/gitsize-guard/. The standalone hooks/ directory at the repository
+#   root remains available as the "manual install" option.
 # ==============================================================================
 
 # Ensure jq is installed
@@ -73,17 +78,44 @@ if [ -z "$REPO_ROOT" ]; then
   exit 0 # Not inside a git repo, allow
 fi
 
-# Locate gitsize binary (configurable via GITSIZE_BIN, default 'gitsize')
-GITSIZE="${GITSIZE_BIN:-gitsize}"
-if ! command -v "$GITSIZE" >/dev/null 2>&1; then
-  if [ -x "$REPO_ROOT/bin/gitsize" ]; then
+# ==============================================================================
+# Binary Resolution Logic:
+# 1. GITSIZE_BIN environment variable (if set)
+# 2. bin/gitsize within the plugin directory (${CLAUDE_PLUGIN_DIR} or relative)
+# 3. "gitsize" on system PATH
+# ==============================================================================
+GITSIZE=""
+
+# Step 1: Check GITSIZE_BIN
+if [ -n "$GITSIZE_BIN" ] && [ -x "$GITSIZE_BIN" ]; then
+  GITSIZE="$GITSIZE_BIN"
+fi
+
+# Step 2: Check bin/gitsize inside the plugin directory
+if [ -z "$GITSIZE" ]; then
+  PLUGIN_DIR="${CLAUDE_PLUGIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  if [ -x "$PLUGIN_DIR/bin/gitsize" ]; then
+    GITSIZE="$PLUGIN_DIR/bin/gitsize"
+  elif [ -x "$PLUGIN_DIR/bin/gitsize.exe" ]; then
+    GITSIZE="$PLUGIN_DIR/bin/gitsize.exe"
+  elif [ -x "$REPO_ROOT/bin/gitsize" ]; then
     GITSIZE="$REPO_ROOT/bin/gitsize"
   elif [ -x "$REPO_ROOT/bin/gitsize.exe" ]; then
     GITSIZE="$REPO_ROOT/bin/gitsize.exe"
-  else
-    echo "[gitsize-guard] Warning: gitsize binary not found. Set GITSIZE_BIN or add gitsize to PATH. Failing open." >&2
-    exit 0
   fi
+fi
+
+# Step 3: Fall back to "gitsize" on PATH
+if [ -z "$GITSIZE" ]; then
+  if command -v gitsize >/dev/null 2>&1; then
+    GITSIZE="gitsize"
+  fi
+fi
+
+# If binary cannot be found in any of the 3 locations, fail open with warning
+if [ -z "$GITSIZE" ]; then
+  echo "[gitsize-guard] Warning: gitsize binary not found (checked GITSIZE_BIN, plugin bin/, and PATH). Failing open." >&2
+  exit 0
 fi
 
 # Run analysis and capture output
