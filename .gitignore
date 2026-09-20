@@ -10,3 +10,11 @@ plugin/gitsize-guard/bin/gitsize
 # Go test cache
 *.test
 *.out
+
+# Media / screen recordings (keep out of git)
+*.gif
+*.mp4
+*.webm
+*.mov
+demo/
+recordings/
