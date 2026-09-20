@@ -1,0 +1,11 @@
+{
+  "name": "gitsize-guard-marketplace",
+  "description": "Marketplace for gitsize-guard, a repository-storage-impact guard for Claude Code.",
+  "plugins": [
+    {
+      "name": "gitsize-guard",
+      "source": "./plugin/gitsize-guard",
+      "description": "Blocks or warns before Claude Code commits files that significantly grow your Git repository size."
+    }
+  ]
+}
