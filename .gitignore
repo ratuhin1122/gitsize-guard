@@ -2,6 +2,7 @@
 /bin/
 /dist/
 *.exe
+plugin/gitsize-guard/bin/gitsize
 
 # macOS
 .DS_Store

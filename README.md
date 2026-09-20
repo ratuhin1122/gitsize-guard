@@ -2,9 +2,36 @@
 
 A Git pre-commit hook tool that guards against accidentally committing oversized files, powered by Claude Code hooks.
 
-## Installing the hook
+## Installing as a plugin
 
-To register and use `gitsize-guard` with Claude Code in your project:
+`gitsize-guard` is packaged as an official, self-contained Claude Code plugin. The plugin packages its own compiled binary and PreToolUse hook.
+
+### 1. Build the plugin package
+Before installing locally, build the self-contained plugin package:
+```bash
+./scripts/build-plugin.sh
+```
+This compiles `gitsize` directly into `plugin/gitsize-guard/bin/` so end users do not require a separate Go environment.
+
+### 2. Local testing (Development / Grading Demo)
+You can load the plugin directly into any Claude Code session using the `--plugin-dir` flag:
+```bash
+claude --plugin-dir /absolute/path/to/gitsize-guard/plugin/gitsize-guard
+```
+
+### 3. Real-world installation (via Marketplace)
+Once published to GitHub, you can add this repository's marketplace and install the plugin globally or per-project in Claude Code:
+
+```text
+/plugin marketplace add ratuhin1122/gitsize-guard
+/plugin install gitsize-guard@gitsize-guard-marketplace
+```
+
+---
+
+## Manual Installation (Fallback)
+
+If you prefer to install the hook manually into an existing project without using Claude Code's plugin manager:
 
 1. **Build the CLI binary**:
    ```bash
@@ -30,6 +57,8 @@ To register and use `gitsize-guard` with Claude Code in your project:
 
 4. **Restart Claude Code**:
    Restart or start a new Claude Code session for the hook configuration to take effect.
+
+---
 
 ## Demo
 
