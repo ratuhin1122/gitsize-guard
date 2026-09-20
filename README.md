@@ -1,6 +1,25 @@
 # gitsize-guard
 
-A Git pre-commit hook tool that guards against accidentally committing oversized files, powered by Claude Code hooks.
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)
+![Claude Code Plugin](https://img.shields.io/badge/claude--code-plugin-purple.svg)
+
+A **Claude Code plugin** that intercepts file writes and git operations *before* they happen, blocking commits that would significantly grow your Git repository's storage size — and telling Claude Code why, so it can adapt on its own.
+
+## The problem
+
+AI coding agents like Claude Code can create and commit files far faster than a human reviewing each change. If an agent adds a large binary — a model file, a video asset, a build artifact — it can be committed to Git in seconds. The problem: once something lands in Git history, it stays there **permanently**, even after you delete it later. A 400MB repository can silently balloon to 600MB+ from a single careless commit, with no warning to the agent or the developer.
+
+gitsize-guard adds that missing awareness directly into Claude Code's tool-execution flow using its `PreToolUse` hook system, so oversized files get caught *before* they're written or committed — not discovered weeks later during a repo cleanup.
+
+## What it does
+
+- Calculates the **actual Git object storage growth** a file would introduce (not just raw file size — Git's compression and object deduplication mean the real number is often very different)
+- Classifies the change as low / medium / high risk against configurable thresholds
+- **Blocks** the write or commit when risk is high, returning a clear reason to Claude Code via its hook exit-code contract
+- Lets Claude Code **adapt automatically** — e.g. switching to Git LFS — instead of the agent silently bloating your repository
+
+---
 
 ## Installing as a plugin
 
