@@ -1,10 +1,15 @@
 package analyzer
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 )
+
+// binarySniffLen matches git's own heuristic: a NUL in the first 8000 bytes.
+const binarySniffLen = 8000
 
 // HumanReadableSize converts a byte count into a human-readable string
 // using binary units (1024-based: KB, MB, GB).
@@ -36,23 +41,26 @@ func IsLikelyBinary(filePath string) (bool, error) {
 	}
 	defer f.Close()
 
-	buf := make([]byte, 8000)
-	n, err := f.Read(buf)
-	if err != nil && err != io.EOF {
+	buf := make([]byte, binarySniffLen)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return false, err
 	}
-
-	for i := 0; i < n; i++ {
-		if buf[i] == 0x00 {
-			return true, nil
-		}
-	}
-	return false, nil
+	return ContainsNUL(buf[:n]), nil
 }
 
-// GetFileSize returns the size in bytes of the file at filePath.
+// ContainsNUL reports whether the first 8000 bytes of b contain a NUL byte.
+func ContainsNUL(b []byte) bool {
+	if len(b) > binarySniffLen {
+		b = b[:binarySniffLen]
+	}
+	return bytes.IndexByte(b, 0) >= 0
+}
+
+// GetFileSize returns the size in bytes of the file at filePath. Symlinks are
+// not followed: git stores a symlink as its target path, so that is its size.
 func GetFileSize(filePath string) (int64, error) {
-	info, err := os.Stat(filePath)
+	info, err := os.Lstat(filePath)
 	if err != nil {
 		return 0, err
 	}

@@ -1,0 +1,11 @@
+{
+  "name": "gitsize-guard",
+  "version": "0.2.0",
+  "description": "Blocks Claude Code from staging or committing changes that would significantly grow your Git repository, and says why so it can switch to Git LFS or .gitignore instead.",
+  "author": {
+    "name": "ratuhin1122"
+  },
+  "repository": "https://github.com/ratuhin1122/gitsize-guard",
+  "license": "MIT",
+  "keywords": ["git", "git-lfs", "repository-size", "hooks"]
+}
