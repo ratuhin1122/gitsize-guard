@@ -1,142 +1,102 @@
 package analyzer
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClassifyRisk(t *testing.T) {
-	th := DefaultThresholds()
+	th := Thresholds{WarningBytes: 50 * mib, FailureBytes: 100 * mib}
 
 	tests := []struct {
-		name          string
-		growthBytes   int64
-		wantRisk      string
-		wantReasons   bool // true if we expect non-empty reasons
+		name       string
+		growth     int64
+		thresholds Thresholds
+		wantRisk   string
+		wantReason string
 	}{
-		{
-			name:        "zero bytes is low risk",
-			growthBytes: 0,
-			wantRisk:    RiskLow,
-			wantReasons: false,
-		},
-		{
-			name:        "1 MB is low risk",
-			growthBytes: 1 * 1024 * 1024,
-			wantRisk:    RiskLow,
-			wantReasons: false,
-		},
-		{
-			name:        "just below warning threshold is low risk",
-			growthBytes: th.WarningBytes - 1,
-			wantRisk:    RiskLow,
-			wantReasons: false,
-		},
-		{
-			name:        "exactly at warning threshold is medium risk",
-			growthBytes: th.WarningBytes,
-			wantRisk:    RiskMedium,
-			wantReasons: true,
-		},
-		{
-			name:        "between warning and failure is medium risk",
-			growthBytes: 75 * 1024 * 1024,
-			wantRisk:    RiskMedium,
-			wantReasons: true,
-		},
-		{
-			name:        "just below failure threshold is medium risk",
-			growthBytes: th.FailureBytes - 1,
-			wantRisk:    RiskMedium,
-			wantReasons: true,
-		},
-		{
-			name:        "exactly at failure threshold is high risk",
-			growthBytes: th.FailureBytes,
-			wantRisk:    RiskHigh,
-			wantReasons: true,
-		},
-		{
-			name:        "well above failure threshold is high risk",
-			growthBytes: 500 * 1024 * 1024,
-			wantRisk:    RiskHigh,
-			wantReasons: true,
-		},
+		{"zero growth", 0, th, RiskLow, ""},
+		{"below warning", 10 * mib, th, RiskLow, ""},
+		{"at warning", 50 * mib, th, RiskMedium, "warning threshold"},
+		{"between", 75 * mib, th, RiskMedium, "warning threshold"},
+		{"at failure", 100 * mib, th, RiskHigh, "failure threshold"},
+		{"above failure", 500 * mib, th, RiskHigh, "failure threshold"},
+		{"zero failure threshold still ignores zero growth", 0, Thresholds{}, RiskLow, ""},
+		{"zero failure threshold blocks any growth", 1, Thresholds{}, RiskHigh, "failure threshold"},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			risk, reasons := ClassifyRisk(tc.growthBytes, th)
+			risk, reasons := ClassifyRisk(tc.growth, tc.thresholds)
 			if risk != tc.wantRisk {
-				t.Errorf("ClassifyRisk(%d) risk = %q, want %q", tc.growthBytes, risk, tc.wantRisk)
+				t.Errorf("risk = %q, want %q", risk, tc.wantRisk)
 			}
-			if tc.wantReasons && len(reasons) == 0 {
-				t.Error("expected non-empty reasons, got none")
-			}
-			if !tc.wantReasons && len(reasons) != 0 {
-				t.Errorf("expected no reasons, got %v", reasons)
+			if tc.wantReason == "" {
+				if len(reasons) != 0 {
+					t.Errorf("expected no reasons, got %v", reasons)
+				}
+			} else if len(reasons) != 1 || !strings.Contains(reasons[0], tc.wantReason) {
+				t.Errorf("reasons = %v, want one mentioning %q", reasons, tc.wantReason)
 			}
 		})
 	}
 }
 
-func TestRecommendAction(t *testing.T) {
-	sampleFile := &FileImpact{
-		FilePath:   "assets/big.bin",
-		SizeBytes:  200 * 1024 * 1024,
-		IsBinary:   true,
-		ChangeType: "added",
+func TestThresholdsFromMB(t *testing.T) {
+	tests := []struct {
+		warning, failure int
+		wantErr          string
+	}{
+		{50, 100, ""},
+		{0, 0, ""},
+		{100, 100, ""},
+		{-1, 100, "negative"},
+		{50, -1, "negative"},
+		{200, 100, "exceeds"},
+		{50, MaxThresholdMB + 1, "at most"},
 	}
+	for _, tc := range tests {
+		th, err := ThresholdsFromMB(tc.warning, tc.failure)
+		if tc.wantErr == "" {
+			if err != nil {
+				t.Errorf("ThresholdsFromMB(%d, %d): unexpected error %v", tc.warning, tc.failure, err)
+			} else if th.WarningBytes != int64(tc.warning)*mib || th.FailureBytes != int64(tc.failure)*mib {
+				t.Errorf("ThresholdsFromMB(%d, %d) = %+v", tc.warning, tc.failure, th)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("ThresholdsFromMB(%d, %d) error = %v, want %q", tc.warning, tc.failure, err, tc.wantErr)
+		}
+	}
+}
+
+func TestRecommendAction(t *testing.T) {
+	bin := &FileImpact{FilePath: "models/weights.bin", GrowthBytes: 200 * mib, IsBinary: true}
+	text := &FileImpact{FilePath: "data/dump.sql", GrowthBytes: 200 * mib}
+	small := &FileImpact{FilePath: "a.js", GrowthBytes: 1 * mib}
 
 	tests := []struct {
-		name      string
-		riskLevel string
-		isBinary  bool
-		largest   *FileImpact
-		wantEmpty bool
-		wantSnip  string // substring expected in the recommendation
+		name    string
+		risk    string
+		largest *FileImpact
+		total   int64
+		want    string
 	}{
-		{
-			name:      "high risk binary recommends Git LFS",
-			riskLevel: RiskHigh,
-			isBinary:  true,
-			largest:   sampleFile,
-			wantSnip:  "Git LFS",
-		},
-		{
-			name:      "high risk text recommends build-time generation",
-			riskLevel: RiskHigh,
-			isBinary:  false,
-			largest:   nil,
-			wantSnip:  "generated at build time",
-		},
-		{
-			name:      "medium risk recommends monitoring",
-			riskLevel: RiskMedium,
-			isBinary:  false,
-			largest:   nil,
-			wantSnip:  "Monitor this",
-		},
-		{
-			name:      "low risk returns empty string",
-			riskLevel: RiskLow,
-			isBinary:  false,
-			largest:   nil,
-			wantEmpty: true,
-		},
+		{"low", RiskLow, bin, 200 * mib, ""},
+		{"no files", RiskHigh, nil, 0, ""},
+		{"high binary", RiskHigh, bin, 200 * mib, `git lfs track "*.bin"`},
+		{"high text", RiskHigh, text, 200 * mib, "large text file"},
+		{"medium", RiskMedium, bin, 200 * mib, "if it will change often"},
+		{"many small files", RiskHigh, small, 200 * mib, "Many files"},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := RecommendAction(tc.riskLevel, tc.isBinary, tc.largest)
-			if tc.wantEmpty {
-				if rec != "" {
-					t.Errorf("expected empty recommendation, got %q", rec)
-				}
-				return
+			got := RecommendAction(tc.risk, tc.largest, tc.total)
+			if tc.want == "" && got != "" {
+				t.Errorf("expected no recommendation, got %q", got)
 			}
-			if rec == "" {
-				t.Fatal("expected non-empty recommendation, got empty")
-			}
-			if !contains(rec, tc.wantSnip) {
-				t.Errorf("recommendation %q does not contain %q", rec, tc.wantSnip)
+			if tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Errorf("recommendation = %q, want it to contain %q", got, tc.want)
 			}
 		})
 	}
@@ -150,18 +110,4 @@ func TestDefaultThresholds(t *testing.T) {
 	if th.FailureBytes != 100*1024*1024 {
 		t.Errorf("FailureBytes = %d, want %d", th.FailureBytes, 100*1024*1024)
 	}
-}
-
-// contains checks if s contains substr (simple helper to avoid importing strings in test).
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

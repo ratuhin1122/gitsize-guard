@@ -1,4 +1,5 @@
 {
+  "description": "gitsize-guard: check git add/commit and large file writes for repository growth",
   "hooks": {
     "PreToolUse": [
       {
@@ -6,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/hooks/pretooluse-gitsize.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-gitsize.sh\"",
             "timeout": 30
           }
         ]
