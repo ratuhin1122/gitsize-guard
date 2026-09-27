@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-gitsize.sh\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-gitsize.sh\"",
+            "shell": "bash",
             "timeout": 30
           }
         ]

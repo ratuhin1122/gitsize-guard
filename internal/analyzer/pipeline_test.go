@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -377,6 +378,9 @@ func TestAnalyzeStagedRenameAddsNothing(t *testing.T) {
 }
 
 func TestAnalyzeTrickyPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystems do not permit the path forms exercised by this test")
+	}
 	repo := newRepo(t)
 	base := randomBytes(t, 3*mib)
 	writeFile(t, filepath.Join(repo, "base.bin"), base)
@@ -394,6 +398,9 @@ func TestAnalyzeTrickyPaths(t *testing.T) {
 }
 
 func TestAnalyzeRepoNameEndingInSpace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystems do not permit directory names ending in a space")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found on PATH")
 	}

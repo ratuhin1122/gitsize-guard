@@ -1,6 +1,7 @@
 package shellcmd
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,21 +9,21 @@ import (
 	"github.com/ratuhin1122/gitsize-guard/internal/analyzer"
 )
 
-const (
-	cwd  = "/work/repo"
-	home = "/home/me"
+var (
+	cwd  = filepath.FromSlash("/work/repo")
+	home = filepath.FromSlash("/home/me")
 )
 
 func paths(dir string, specs ...string) analyzer.Selection {
-	return analyzer.Selection{Dir: dir, Kind: analyzer.KindPaths, Pathspecs: specs}
+	return analyzer.Selection{Dir: filepath.Clean(dir), Kind: analyzer.KindPaths, Pathspecs: specs}
 }
 
 func tracked(dir string, specs ...string) analyzer.Selection {
-	return analyzer.Selection{Dir: dir, Kind: analyzer.KindTracked, Pathspecs: specs}
+	return analyzer.Selection{Dir: filepath.Clean(dir), Kind: analyzer.KindTracked, Pathspecs: specs}
 }
 
 func staged(dir string) analyzer.Selection {
-	return analyzer.Selection{Dir: dir, Kind: analyzer.KindStaged}
+	return analyzer.Selection{Dir: filepath.Clean(dir), Kind: analyzer.KindStaged}
 }
 
 func TestSelections(t *testing.T) {

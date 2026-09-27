@@ -28,6 +28,7 @@ gitsize-guard adds that missing awareness directly into Claude Code's tool-execu
 
 - `git` (2.44+ for partial clones: older versions ignore `GIT_NO_LAZY_FETCH`, so a treeless clone may fetch trees)
 - Go 1.22+ so the plugin can build its `gitsize` binary from source on first use (offline, with `GOPROXY=off` and `GOTOOLCHAIN=local`). Without Go, point `GITSIZE_BIN` at a `gitsize` binary you built yourself.
+- Git Bash on Windows. The hook explicitly selects Claude Code's Bash shell so it does not resolve a WSL `bash.exe` from `PATH`.
 
 ## Installing as a plugin
 
@@ -114,7 +115,7 @@ The hook never emits `allow`, so it can't bypass your permission settings.
 
 The hook only runs a `gitsize` binary from places you control: `GITSIZE_BIN` (absolute paths only), a build of the plugin's own source (cached per checkout, rebuilt when the source changes, built offline, ignoring `GOOS`/`GOARCH`/`GOFLAGS`, `go.work`, `go env -w` settings and VCS stamping), or an absolute `PATH` entry. The shim also drops relative `PATH` entries before running anything, so a cloned repository can't supply the tools it (or `gitsize`) runs. Every git call runs with `GIT_NO_LAZY_FETCH=1`.
 
-One thing the plugin can't control: Claude Code starts the hook with `bash` looked up on your `PATH`, as it does for every command hook. If your `PATH` puts a relative entry (like `./node_modules/.bin`) ahead of the system directories, a repository could supply that `bash`, for this and every other hook. Keep `PATH` entries absolute.
+Claude Code starts the hook directly with its configured Bash shell. On Windows, `shell: "bash"` selects Git Bash instead of launching a second `bash.exe` from `PATH`, which avoids accidentally crossing into WSL. Once the script starts, it drops relative `PATH` entries before resolving any tool. Keep your own `PATH` entries absolute for defense in depth and for other hooks that invoke commands by name.
 
 ## Limitations
 

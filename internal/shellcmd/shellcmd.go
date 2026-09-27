@@ -299,7 +299,7 @@ func readsWorktree(sels []analyzer.Selection) bool {
 }
 
 func pending(dir string) analyzer.Selection {
-	return analyzer.Selection{Dir: dir, Kind: analyzer.KindPending}
+	return analyzer.Selection{Dir: filepath.Clean(dir), Kind: analyzer.KindPending}
 }
 
 // rootRelative rewrites relative pathspecs to be relative to the repository
