@@ -64,7 +64,8 @@ Register the hook script **from your gitsize-guard checkout** (don't copy it int
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"/absolute/path/to/gitsize-guard/hooks/pretooluse-gitsize.sh\"",
+            "command": "\"/absolute/path/to/gitsize-guard/hooks/pretooluse-gitsize.sh\"",
+            "shell": "bash",
             "timeout": 30
           }
         ]
