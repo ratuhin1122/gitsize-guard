@@ -1,11 +1,14 @@
 {
   "name": "gitsize-guard-marketplace",
-  "description": "Marketplace for gitsize-guard, a repository-storage-impact guard for Claude Code.",
+  "owner": {
+    "name": "ratuhin1122"
+  },
+  "description": "Marketplace for gitsize-guard, a repository-size guard for Claude Code.",
   "plugins": [
     {
       "name": "gitsize-guard",
-      "source": "./plugin/gitsize-guard",
-      "description": "Blocks or warns before Claude Code commits files that significantly grow your Git repository size."
+      "source": "./",
+      "description": "Blocks or asks before Claude Code stages or commits files that would significantly grow your Git repository."
     }
   ]
 }

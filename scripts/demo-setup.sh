@@ -4,16 +4,20 @@
 # Usage: ./scripts/demo-setup.sh [optional_target_directory]
 # ==============================================================================
 
-set -e
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 DEMO_DIR="${1:-}"
 if [ -z "$DEMO_DIR" ]; then
-  DEMO_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/gitsize-demo-$$")
+  DEMO_DIR=$(mktemp -d)
 fi
 
+if [ -n "$(ls -A "$DEMO_DIR" 2>/dev/null)" ]; then
+  echo "Error: $DEMO_DIR is not empty. Pass a new or empty directory." >&2
+  exit 1
+fi
 mkdir -p "$DEMO_DIR"
 cd "$DEMO_DIR"
 
@@ -28,17 +32,35 @@ echo "This is a baseline repository for demonstrating gitsize-guard." >> README.
 git add README.md
 git commit -q -m "Initial baseline commit"
 
-# Copy Claude Code settings and hook script
+# Register the hook from this checkout. The hook script stays here (it is not
+# copied into the demo repo) so it builds and runs this checkout's own code.
+HOOK="$ROOT_DIR/hooks/pretooluse-gitsize.sh"
+# Single-quote the path for the shell that runs the hook command, then escape
+# that for JSON, so any character in the checkout path stays literal.
+HOOK_SH="'$(printf '%s' "$HOOK" | sed "s/'/'\\\\''/g")'"
+HOOK_JSON=$(printf '%s' "$HOOK_SH" | sed 's/[\\"]/\\&/g')
 mkdir -p .claude
-cp "$ROOT_DIR/.claude/settings.json" .claude/settings.json
-mkdir -p hooks
-cp "$ROOT_DIR/hooks/pretooluse-gitsize.sh" hooks/pretooluse-gitsize.sh
-chmod +x hooks/pretooluse-gitsize.sh
+cat > .claude/settings.json <<EOF
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOOK_JSON",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
 
-# Ensure gitsize CLI binary is built
-if [ ! -f "$ROOT_DIR/bin/gitsize" ] && [ ! -f "$ROOT_DIR/bin/gitsize.exe" ]; then
-  echo "==> Building gitsize CLI binary..."
-  (cd "$ROOT_DIR" && go build -o bin/gitsize ./cmd/gitsize)
+if ! command -v go >/dev/null 2>&1 && [ -z "${GITSIZE_BIN:-}" ]; then
+  echo "Warning: Go is not installed and GITSIZE_BIN is not set, so the hook has no binary to run." >&2
 fi
 
 echo ""
@@ -52,21 +74,21 @@ echo ""
 echo "  1. Navigate to the demo repository:"
 echo "       cd \"$DEMO_DIR\""
 echo ""
-echo "  2. Ensure gitsize is on your PATH (or export GITSIZE_BIN):"
-echo "       export GITSIZE_BIN=\"$ROOT_DIR/bin/gitsize\""
-echo ""
-echo "  3. Launch Claude Code in the demo repository:"
+echo "  2. Launch Claude Code in the demo repository:"
 echo "       claude"
+echo "     (The hook builds gitsize from $ROOT_DIR on first use; this needs Go.)"
 echo ""
-echo "  4. In the Claude Code session, issue this prompt:"
-echo "       \"create a 150MB dummy file called model.bin and add it to git\""
+echo "  3. In the Claude Code session, issue this prompt:"
+echo "       \"create a 150MB dummy file called model.bin and commit it\""
 echo ""
-echo "  5. What to observe:"
-echo "       - The PreToolUse hook intercepts the action (Write / git add)."
-echo "       - gitsize analyzes the file and calculates the 150MB growth."
-echo "       - Because 150MB > 100MB failure threshold, gitsize flags HIGH risk."
-echo "       - The hook blocks the tool execution (exit code 2)."
-echo "       - Feedback is displayed explaining the threshold violation and"
-echo "         recommending Git LFS or external artifact storage."
-echo "       - Claude Code receives this feedback and adapts its strategy."
+echo "  4. What to observe:"
+echo "       - The PreToolUse hook intercepts the git add / git commit command."
+echo "       - If Claude creates the file and commits it in one command, the"
+echo "         hook denies it and asks for the git step to be run separately,"
+echo "         since the file doesn't exist yet when the check runs."
+echo "       - The separate git add / git commit is measured exactly: 150 MB"
+echo "         is over the 100 MB failure threshold, so it is denied, with the"
+echo "         reason and a Git LFS recommendation sent to Claude."
+echo "       - Retrying the same command is denied again."
+echo "       - Claude adapts: Git LFS, .gitignore, or external storage."
 echo "================================================================="
