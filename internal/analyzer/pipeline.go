@@ -109,7 +109,8 @@ type candidate struct {
 	rel    string // slash-separated path relative to the repository root
 	blob   string // staged blob id; empty for working-tree content
 	change string
-	rehash bool // compare with HEAD whatever its size (git add --renormalize)
+	rehash bool  // compare with HEAD whatever its size (git add --renormalize)
+	size   int64 // HEAD blob size when selected for near-duplicate comparison
 }
 
 // repoScan collects the candidate files for one repository.
