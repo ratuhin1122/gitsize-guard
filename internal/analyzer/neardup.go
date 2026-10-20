@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,7 +55,17 @@ func (c *nearDupCheck) command(repo string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(c.ctx, "git", args...)
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(), gitEnv...)
+	cmd.WaitDelay = 250 * time.Millisecond
 	return cmd
+}
+
+// Git launchers can leave a child holding a pipe after the launcher is killed
+// on Windows. Closing our read end makes a blocked read honor the deadline.
+func cancelGitStream(cmd *exec.Cmd, stdout io.Closer) {
+	cmd.Cancel = func() error {
+		_ = stdout.Close()
+		return cmd.Process.Kill()
+	}
 }
 
 func findCandidates(repo string, newSize int64, cfg NearDupConfig) (candidates []candidate, notes []string) {
@@ -84,6 +95,7 @@ func (c *nearDupCheck) findCandidates(repo string, newSize int64, cfg NearDupCon
 	if err != nil {
 		return nil, []string{fmt.Sprintf("Near-duplicate discovery skipped: %v", err)}
 	}
+	cancelGitStream(cmd, stdout)
 	if err := cmd.Start(); err != nil {
 		return nil, []string{fmt.Sprintf("Near-duplicate discovery skipped: %v", err)}
 	}
@@ -100,13 +112,13 @@ func (c *nearDupCheck) findCandidates(repo string, newSize int64, cfg NearDupCon
 		if !ok || len(fields) != 4 || fields[1] != "blob" {
 			continue
 		}
-		if fields[3] == "-" {
+		size, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil || size < 0 {
 			notes = append(notes, fmt.Sprintf("Skipped near-duplicate candidate %q: blob unavailable locally.", path))
 			continue
 		}
-		size, err := strconv.ParseInt(fields[3], 10, 64)
 		// Avoid overflow in the size ratio comparisons.
-		if err != nil || size < 0 || size < cfg.MinBytes || size < newSize/2+newSize%2 || (size > newSize && size-newSize > newSize) {
+		if size < cfg.MinBytes || size < newSize/2+newSize%2 || (size > newSize && size-newSize > newSize) {
 			continue
 		}
 		candidates = append(candidates, candidate{rel: path, blob: fields[2], size: size})
@@ -188,11 +200,13 @@ func (c *nearDupCheck) readBlob(repo, oid string, consume func(io.Reader) error)
 	if err != nil {
 		return err
 	}
+	cancelGitStream(cmd, stdout)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	readErr := consume(nearDupReader{check: c, reader: stdout})
 	if readErr != nil {
+		_ = stdout.Close()
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
@@ -255,4 +269,92 @@ func (c *nearDupCheck) chunkCandidates(repo string, candidates []candidate) (map
 		chunks[cand.blob] = refs
 	}
 	return chunks, notes
+}
+
+func nearDuplicateReason(file FileImpact) string {
+	return fmt.Sprintf("%s is ~%.0f%% identical to %s already in HEAD", file.FilePath, file.NearDuplicate.Similarity*100, file.NearDuplicate.Path)
+}
+
+// CheckNearDuplicate annotates a file using supplied content, without changing
+// its measured size or growth. The caller builds a report to apply risk policy.
+// Content is consumed only when detection is enabled and the file is eligible.
+func CheckNearDuplicate(repo string, file *FileImpact, content io.Reader, cfg NearDupConfig) []string {
+	if !cfg.Enabled || file.SizeBytes < cfg.MinBytes {
+		return nil
+	}
+	check, cancel := newNearDupCheck()
+	defer cancel()
+	return check.annotate(repo, file, cfg, func() ([]similarity.ChunkRef, error) {
+		return similarity.Chunk(nearDupReader{check: check, reader: content})
+	})
+}
+
+func (c *nearDupCheck) annotate(repo string, file *FileImpact, cfg NearDupConfig, readNew func() ([]similarity.ChunkRef, error)) []string {
+	candidates, notes := c.findCandidates(repo, file.SizeBytes, cfg)
+	// Updating a path's own version is not adding a duplicate copy.
+	filtered := candidates[:0]
+	for _, cand := range candidates {
+		if cand.rel != filepath.ToSlash(file.FilePath) {
+			filtered = append(filtered, cand)
+		}
+	}
+	if len(filtered) == 0 {
+		return notes
+	}
+	newChunks, err := readNew()
+	if err != nil {
+		return append(notes, skipNearDupNote(candidate{rel: file.FilePath}, err))
+	}
+	oldChunks, skipped := c.chunkCandidates(repo, filtered)
+	notes = append(notes, skipped...)
+	for _, cand := range filtered {
+		chunks, ok := oldChunks[cand.blob]
+		if !ok {
+			continue
+		}
+		result := similarity.Compare(newChunks, chunks)
+		if result.Similarity >= cfg.Threshold && result.NewSize > 0 && (file.NearDuplicate == nil || result.Similarity > file.NearDuplicate.Similarity) {
+			file.NearDuplicate = &NearDuplicate{Path: cand.rel, Similarity: result.Similarity, SharedBytes: result.SharedBytes, CandidateSize: cand.size}
+		}
+	}
+	return notes
+}
+
+func (r *repoScan) nearDuplicates(files []FileImpact, cfg NearDupConfig) []string {
+	if !cfg.Enabled {
+		return nil
+	}
+	check, cancel := newNearDupCheck()
+	defer cancel()
+	var notes []string
+	for i := range files {
+		file := &files[i]
+		if file.SizeBytes < cfg.MinBytes {
+			continue
+		}
+		cand := r.cands[file.FilePath]
+		if cand == nil {
+			continue
+		}
+		notes = append(notes, check.annotate(r.root, file, cfg, func() ([]similarity.ChunkRef, error) {
+			if cand.blob != "" {
+				return check.chunkCandidate(r.root, cand.blob)
+			}
+			path := r.abs(file.FilePath)
+			info, err := os.Lstat(path)
+			if err != nil {
+				return nil, err
+			}
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("not a regular file")
+			}
+			reader, err := os.Open(path)
+			if err != nil {
+				return nil, err
+			}
+			defer reader.Close()
+			return similarity.Chunk(nearDupReader{check: check, reader: reader})
+		})...)
+	}
+	return notes
 }

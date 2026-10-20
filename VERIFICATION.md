@@ -254,3 +254,138 @@ stdout: {"permissionDecision":"deny","permissionDecisionReason":"... failure thr
 ## Conclusion
 
 All 11 claimed fixes from PR #1 have been independently verified against the merged `main` branch with actual command output as evidence. Every test produced the expected behavior. The security model, threshold validation, command parsing, and file analysis all function correctly on Windows.
+
+---
+
+## v0.3.0 verification — 2026-10-20
+
+**Scope:** Automated Go integration tests and CLI validation on Windows/amd64, using `go version go1.27.0 windows/amd64` and `git version 2.44.0.windows.1`. Commands below run from the repository root in PowerShell.
+
+**Not tested in a live Claude Code session.** Hook payload tests exercise the Go entry point; they do not establish that an installed plugin has been exercised interactively in Claude Code.
+
+### Near-duplicate, negative cases, budgets, and repository preservation
+
+The test creates a temporary Git repository and commits a deterministic 12 MiB `math/rand` file (seed `2026`). The modified copy changes a contiguous 5% region and inserts 200 bytes in its middle. An unrelated 12 MiB file uses seed `99`; the small copy is a 1 MiB prefix of the original. The default 5 MiB minimum and 0.90 similarity threshold are used.
+
+The budget case injects a reduced allowance of 25,166,023 bytes into the production check: new-file reading fits, but reading the HEAD candidate would exceed the remainder. This exercises the skip note without allocating a 512 MiB fixture; the production default remains 512 MiB. The test checks that the skip is not returned as an analysis error and does not change growth.
+
+Before and after each analysis, and around the whole sequence, the test compares SHA-256 checksums keyed by relative path for every file under `.git`, including the index, config, refs, reflogs, and objects. This detects created, removed, and changed files, rather than checking only object counts.
+
+The deadline regression test confirms that cancellation interrupts a blocked candidate-stream read. Stream cancellation closes the read pipe as well as killing the launcher, and subprocess waiting is bounded when inherited pipes remain open.
+
+Exact command:
+
+```powershell
+go test -count=1 -race -v ./internal/analyzer -run '^TestNearDup(ReadOnlyIntegration|StreamDeadlineInterruptsRead)$'
+```
+
+Actual output:
+
+```text
+=== RUN   TestNearDupReadOnlyIntegration
+=== RUN   TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion
+    neardup_readonly_test.go:136: file=modified-copy.bin size=12583112 growth_bytes=12583112 near_duplicates=1
+    neardup_readonly_test.go:146: near_duplicate path=original.bin similarity=0.947235 shared_bytes=11919168 candidate_size=12582912
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/unrelated_random_file
+    neardup_readonly_test.go:136: file=unrelated.bin size=12582912 growth_bytes=12582912 near_duplicates=0
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum
+    neardup_readonly_test.go:136: file=small-copy.bin size=1048576 growth_bytes=1048576 near_duplicates=0
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget
+    neardup_readonly_test.go:177: budget_note="Skipped near-duplicate candidate \"original.bin\": near-duplicate byte budget reached." error=<nil> growth_bytes=12583112
+    neardup_readonly_test.go:178: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== NAME  TestNearDupReadOnlyIntegration
+    neardup_readonly_test.go:179: git_unchanged=true files=29 (SHA-256 of every .git file)
+--- PASS: TestNearDupReadOnlyIntegration (14.46s)
+    --- PASS: TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion (3.79s)
+    --- PASS: TestNearDupReadOnlyIntegration/unrelated_random_file (3.78s)
+    --- PASS: TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum (0.90s)
+    --- PASS: TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget (1.65s)
+=== RUN   TestNearDupStreamDeadlineInterruptsRead
+--- PASS: TestNearDupStreamDeadlineInterruptsRead (1.01s)
+PASS
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	18.030s
+
+```
+
+### Full race suite compared with the pre-change baseline
+
+The pre-change baseline remains outside Git at `$env:TEMP\gitsize-guard-v030-baseline-failures.txt`. The comparison uses leaf test names, excluding parent failures that merely summarize failed subtests. It separately rejects timeouts, panics, and data-race reports. An exit code of 1 from the Go suite is expected when the known Windows baseline failures remain; it must not be described as a clean full-suite pass.
+
+Exact PowerShell commands used for the comparison:
+
+```powershell
+$baselinePath = Join-Path $env:TEMP 'gitsize-guard-v030-baseline-failures.txt'
+$raceLog = Join-Path $env:TEMP 'gitsize-guard-v030-race.jsonl'
+& go test -race -json ./... 2>&1 |
+    ForEach-Object { $_.ToString() } |
+    Tee-Object -FilePath $raceLog | Out-Null
+$raceExit = $LASTEXITCODE
+$events = @(Get-Content -LiteralPath $raceLog | ForEach-Object {
+    try { $_ | ConvertFrom-Json } catch {}
+})
+$baseline = @(Get-Content -LiteralPath $baselinePath)
+$names = @($events | Where-Object { $_.Action -eq 'fail' -and $_.Test } |
+    ForEach-Object { $_.Test } | Sort-Object -Unique)
+$leaves = @($names | Where-Object {
+    $name = $_
+    -not ($names | Where-Object { $_.StartsWith($name + '/') })
+})
+$newFailures = @($leaves | Where-Object { $_ -notin $baseline })
+$panics = @($events | Where-Object { $_.Output -match 'panic:|test timed out|fatal error:' })
+$races = @($events | Where-Object { $_.Output -match 'WARNING: DATA RACE' })
+$summary = @(
+    "Race exit code: $raceExit"
+    "Baseline failing leaf tests: $($baseline.Count)"
+    "Observed failing leaf tests: $($leaves.Count)"
+    "New failing leaf tests: $($newFailures.Count)"
+    "Timeouts or panics: $($panics.Count)"
+    "Data race reports: $($races.Count)"
+)
+$newFailures | ForEach-Object { $summary += $_ }
+$passed = $newFailures.Count -eq 0 -and $panics.Count -eq 0 -and
+    $races.Count -eq 0 -and ($raceExit -eq 0 -or $leaves.Count -gt 0)
+if ($passed) { $summary += 'Baseline comparison: PASS' }
+else { $summary += 'Baseline comparison: FAIL' }
+$summary | Set-Content -LiteralPath (Join-Path $env:TEMP 'gitsize-guard-v030-baseline-summary.txt')
+$summary | ForEach-Object { Write-Output $_ }
+```
+Actual comparison output:
+
+```text
+Race exit code: 1
+Baseline failing leaf tests: 14
+Observed failing leaf tests: 14
+New failing leaf tests: 0
+Timeouts or panics: 0
+Data race reports: 0
+Baseline comparison: PASS
+```
+
+**Result:** No new failing leaf tests versus the pre-change baseline. The full Windows suite still exits 1 because its 14 known baseline failures remain. No timeouts, panics, or data-race reports were observed in this acceptance run. The earlier timeout and timing-dependent policy-fixture failure were corrected before this run.
+
+### Formatting, vet, and manifest validation
+
+Exact commands:
+
+```powershell
+go vet ./...
+gofmt -l .
+claude plugin validate . --strict
+claude plugin validate .claude-plugin/plugin.json --strict
+```
+
+`go vet ./...` and `gofmt -l .` both exited 0 with no output. Actual manifest-validation output:
+
+```text
+Validating marketplace manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.claude-plugin\marketplace.json
+
+√ Validation passed
+Validating plugin manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.claude-plugin\plugin.json
+
+√ Validation passed
+```
+
+These results establish automated behavior only. **Live Claude Code session testing has not been performed.**

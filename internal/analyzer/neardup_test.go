@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,6 +13,40 @@ import (
 
 	"github.com/ratuhin1122/gitsize-guard/internal/similarity"
 )
+
+func TestNearDupStreamHelper(t *testing.T) {
+	if os.Getenv("NEARDUP_STREAM_HELPER") != "1" {
+		return
+	}
+	_, _ = os.Stdout.Write([]byte("partial blob"))
+	time.Sleep(time.Minute)
+}
+
+func TestNearDupStreamDeadlineInterruptsRead(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestNearDupStreamHelper$")
+	cmd.Env = append(os.Environ(), "NEARDUP_STREAM_HELPER=1")
+	cmd.WaitDelay = 250 * time.Millisecond
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelGitStream(cmd, stdout)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, _ = similarity.Chunk(stdout)
+	_ = cmd.Wait()
+	if ctx.Err() != context.DeadlineExceeded || time.Since(started) > 5*time.Second {
+		t.Fatalf("stream did not stop at its deadline: err=%v elapsed=%s", ctx.Err(), time.Since(started))
+	}
+}
 
 func TestNearDupDefaults(t *testing.T) {
 	if got := DefaultNearDupConfig(); got != (NearDupConfig{true, 0.90, 5 << 20}) {

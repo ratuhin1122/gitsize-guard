@@ -57,6 +57,11 @@ const maxReportedFiles = 20
 // Selections outside any git work tree are ignored. If some selections cannot
 // be analyzed, it returns their errors together with a report on the rest.
 func Analyze(sels []Selection, t Thresholds) (*Report, error) {
+	return AnalyzeWithNearDup(sels, t, DefaultNearDupConfig())
+}
+
+// AnalyzeWithNearDup is Analyze with explicit advisory detection settings.
+func AnalyzeWithNearDup(sels []Selection, t Thresholds, cfg NearDupConfig) (*Report, error) {
 	scans := map[string]*repoScan{}
 	var roots []string
 	var errs []error
@@ -77,11 +82,13 @@ func Analyze(sels []Selection, t Thresholds) (*Report, error) {
 	}
 
 	var worst *Report
+	var notes []string
 	for _, root := range roots {
 		files, err := scans[root].measure()
 		if err != nil {
 			errs = append(errs, err) // files is still the best available measurement
 		}
+		notes = append(notes, scans[root].nearDuplicates(files, cfg)...)
 		if len(roots) > 1 { // say which repository each file is in
 			for i := range files {
 				files[i].FilePath = filepath.ToSlash(filepath.Join(root, filepath.FromSlash(files[i].FilePath)))
@@ -94,6 +101,7 @@ func Analyze(sels []Selection, t Thresholds) (*Report, error) {
 	if worst == nil {
 		worst = NewReport(nil, t)
 	}
+	worst.Notes = notes
 	return worst, errors.Join(errs...)
 }
 
@@ -419,13 +427,24 @@ func NewReport(files []FileImpact, t Thresholds) *Report {
 		total += f.GrowthBytes
 	}
 	risk, reasons := ClassifyRisk(total, t)
+	nearDuplicates := 0
+	for _, f := range files {
+		if f.NearDuplicate != nil {
+			nearDuplicates++
+			reasons = append(reasons, nearDuplicateReason(f))
+		}
+	}
+	if nearDuplicates > 0 && risk == RiskLow {
+		risk = RiskMedium
+	}
 
 	report := &Report{
-		RiskLevel:     risk,
-		GrowthBytes:   total,
-		FilesAnalyzed: len(files),
-		Files:         []FileImpact{},
-		Reasons:       reasons,
+		RiskLevel:      risk,
+		GrowthBytes:    total,
+		FilesAnalyzed:  len(files),
+		Files:          []FileImpact{},
+		Reasons:        reasons,
+		NearDuplicates: nearDuplicates,
 	}
 	if len(files) > maxReportedFiles {
 		files = files[:maxReportedFiles]
@@ -436,5 +455,11 @@ func NewReport(files []FileImpact, t Thresholds) *Report {
 		report.LargestFile = &largest
 	}
 	report.Recommendation = RecommendAction(risk, report.LargestFile, total)
+	if nearDuplicates > 0 {
+		if report.Recommendation != "" {
+			report.Recommendation += " "
+		}
+		report.Recommendation += "Replace the existing file instead of adding a new copy, or track versions with Git LFS / external storage."
+	}
 	return report
 }
