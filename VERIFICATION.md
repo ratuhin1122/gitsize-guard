@@ -389,3 +389,99 @@ Validating plugin manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.c
 ```
 
 These results establish automated behavior only. **Live Claude Code session testing has not been performed.**
+
+## v0.3.0 verification update — 2026-10-23
+
+**Not tested in a live Claude Code session.** These are automated Go tests on Windows. The 2026-10-20 passing results above are historical; the latest full race run does **not** satisfy the no-new-failures requirement.
+
+### Current integration output
+
+The existing test still covers the deterministic 12 MiB original, contiguous 5% edit plus 200-byte insertion, unrelated random file, below-minimum 1 MiB copy, byte-budget note, and SHA-256 checksums of every file under `.git`. It has not been regenerated or weakened. The successful near-duplicate result (0.947235 similarity) and unrelated-file negative result above were observed on 2026-10-20; both cases now hit the production five-second time budget. The latest focused run confirms the small-file skip, byte-budget note without an error, unchanged growth, and unchanged contents of all 29 `.git` files.
+
+Exact test command run from the repository root in PowerShell:
+
+```powershell
+go test -count=1 -race -v ./internal/analyzer -run '^TestNearDup(ReadOnlyIntegration|StreamDeadlineInterruptsRead)$'
+```
+
+Actual output (exit 1):
+
+```text
+=== RUN   TestNearDupReadOnlyIntegration
+=== RUN   TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion
+    neardup_readonly_test.go:133: unexpected skipped candidates: [Skipped near-duplicate candidate "original.bin": time budget reached.]
+    panic.go:694: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/unrelated_random_file
+    neardup_readonly_test.go:133: unexpected skipped candidates: [Skipped near-duplicate candidate "original.bin": time budget reached.]
+    panic.go:694: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum
+    neardup_readonly_test.go:136: file=small-copy.bin size=1048576 growth_bytes=1048576 near_duplicates=0
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget
+    neardup_readonly_test.go:177: budget_note="Skipped near-duplicate candidate \"original.bin\": near-duplicate byte budget reached." error=<nil> growth_bytes=12583112
+    neardup_readonly_test.go:178: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== NAME  TestNearDupReadOnlyIntegration
+    neardup_readonly_test.go:179: git_unchanged=true files=29 (SHA-256 of every .git file)
+--- FAIL: TestNearDupReadOnlyIntegration (29.06s)
+    --- FAIL: TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion (7.16s)
+    --- FAIL: TestNearDupReadOnlyIntegration/unrelated_random_file (6.53s)
+    --- PASS: TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum (1.22s)
+    --- PASS: TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget (3.89s)
+=== RUN   TestNearDupStreamDeadlineInterruptsRead
+--- PASS: TestNearDupStreamDeadlineInterruptsRead (1.01s)
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/analyzer	32.819s
+FAIL
+
+```
+
+### Latest full-suite baseline comparison
+
+The immediately preceding full-suite command was:
+
+```powershell
+go vet ./...
+go test -race ./...
+```
+
+Vet exited 0 with no output. The race suite exited 1. Its real output was saved outside Git in `readonly-race-2026-10-23.txt`; the original baseline remains outside Git in `baseline-2026-10-23/baseline-failures.txt`. The following exact PowerShell comparison commands were run against those saved outputs:
+
+```powershell
+$verificationRoot = 'C:/Users/FC/.codex/visualizations/2026/10/20/01a15872-8472-7163-93c9-935b36159a26'
+$baseline = @(Get-Content "$verificationRoot/baseline-2026-10-23/baseline-failures.txt")
+$raceLog = "$verificationRoot/readonly-race-2026-10-23.txt"
+$names = @(Select-String -Path $raceLog -Pattern '^\s*--- FAIL: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
+$leaves = @($names | Where-Object { $testName = $_; -not ($names | Where-Object { $_.StartsWith($testName + '/') }) })
+$newFailures = @($leaves | Where-Object { $_ -notin $baseline })
+"Baseline failing leaf tests: $($baseline.Count)"
+"Observed failing leaf tests: $($leaves.Count)"
+"New failing leaf tests: $($newFailures.Count)"
+"Data race reports: $(@(Select-String -Path $raceLog -Pattern 'WARNING: DATA RACE').Count)"
+$newFailures
+if ($newFailures.Count -eq 0) { 'Baseline comparison: PASS' } else { 'Baseline comparison: FAIL' }
+
+```
+
+Actual comparison output:
+
+```text
+Baseline failing leaf tests: 14
+Observed failing leaf tests: 25
+New failing leaf tests: 11
+Data race reports: 0
+TestBashNearDuplicateAsks
+TestHookModifiedTwelveMBNearDuplicate/defaults_ask
+TestHookModifiedTwelveMBNearDuplicate/flag_reenables
+TestHookModifiedTwelveMBNearDuplicate/high_risk_denies_with_advisory
+TestNearDupAnalysisRiskAndGrowth/high_stays_high
+TestNearDupAnalysisRiskAndGrowth/low_becomes_medium
+TestNearDupAnalysisRiskAndGrowth/medium_stays_medium
+TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget
+TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion
+TestNearDupReadOnlyIntegration/unrelated_random_file
+TestWriteNearDuplicateUsesPayload/low_to_medium_asks
+Baseline comparison: FAIL
+
+```
+
+**Result: baseline comparison failed.** There are 11 failing leaf tests absent from the baseline. The failures show time-budget exhaustion, absent hook decisions, or absent near-duplicate advisory text. No data race was reported. The current evidence cannot support a claim of no new test failures, even though the older acceptance run above did. This update changes verification documentation only; the implementation and existing tests are preserved. Live Claude Code session testing remains unperformed.
