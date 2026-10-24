@@ -1,221 +1,255 @@
-# gitsize-guard
+<div align="center">
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)
-![Claude Code Plugin](https://img.shields.io/badge/claude--code-plugin-purple.svg)
+<img src="assets/banner.svg" alt="gitsize-guard — Stop AI agents from bloating your Git repo." width="1280">
 
-A **Claude Code plugin** that checks `git add` / `git commit` commands (and large file writes) *before* they run, blocks the ones that would significantly grow your Git repository, and tells Claude Code why so it can adapt on its own.
+[![MIT license](https://img.shields.io/badge/license-MIT-52cbd5)](LICENSE)
+[![Latest tag](https://img.shields.io/github/v/tag/ratuhin1122/gitsize-guard?label=release)](https://github.com/ratuhin1122/gitsize-guard/tags)
+[![Go 1.22+](https://img.shields.io/badge/Go-1.22%2B-00ADD8)](https://go.dev/doc/install)
+[![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-a78bfa)](.claude-plugin/plugin.json)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-52cbd5)](CONTRIBUTING.md)
+[![Open issues](https://img.shields.io/github/issues/ratuhin1122/gitsize-guard)](https://github.com/ratuhin1122/gitsize-guard/issues)
+
+A Claude Code plugin that checks repository growth before `Write`, `git add`, and `git commit` run.
+
+[Install](#install) · [How it works](#how-it-works) · [Configuration](#configuration) · [Limitations](#limitations) · [Contributing](#contributing)
+
+</div>
 
 ## The problem
 
-AI coding agents like Claude Code can create and commit files far faster than a human reviewing each change. If an agent adds a large binary — a model file, a video asset, a build artifact — it can be committed to Git in seconds. Once something lands in Git history it stays there **permanently**, even after you delete it later, and GitHub rejects any file over 100 MB outright.
+AI agents create and commit files faster than a person can review each change.
+A model file, video, or generated artifact can enter Git history in seconds.
+Deleting it later leaves the original blob in history unless that history is rewritten. GitHub also blocks individual files larger than 100 MiB.
+gitsize-guard adds a size check to Claude Code's tool flow before those additions are staged or committed.
 
-gitsize-guard adds that missing awareness directly into Claude Code's tool-execution flow using its `PreToolUse` hook, so oversized additions get caught *before* they're staged or committed — not discovered weeks later during a repo cleanup.
+## Demo
 
-## What it does
+<!-- TODO: Replace assets/demo.gif with a recording after testing in a live Claude Code session. -->
+![Demo placeholder: live recording pending](assets/demo.gif)
 
-- Works out **exactly which files a command would stage or commit**: `git add <files>`, `git add .`, `git add -A`, `git add -u`, directories, globs, `git -C <dir>`, `--work-tree` with its own `.git`, `cd dir && ...` (including `cd "$(git rev-parse --show-toplevel)"`), `git commit`, `git commit -a`, `git commit <paths>`, `git add --renormalize`, git aliases, scripts passed to `sh -c` or fed to `bash <<EOF`, and the `git commit -m "$(cat <<'EOF' ... EOF)"` form Claude Code itself uses.
-- Measures the **bytes git would newly store**: content already in `HEAD` counts as zero, **Git LFS** files count as the small pointer git stores (without running the LFS filter), and other filtered or re-encoded files are measured in a throwaway object directory.
-- **Denies** the command when the exact total reaches the failure threshold (default 100 MB), with the largest files and a recommendation (e.g. `git lfs track "*.bin"`) fed back to Claude Code.
-- **Denies** a command that creates or changes files (or the index) and then stages or commits in the same line (e.g. `dd ... && git add model.bin && git commit`, or `git stash pop && git commit`), since that content can't be measured before the command runs. Claude is told to run the git step as its own command, which is then checked exactly. Commands that can't change anything, like `git checkout -b`, `go test` or checksums, don't count.
-- **Asks you** to confirm at the warning threshold (default 50 MB), and when it can only estimate what a command stages (variables in paths, `xargs git add`), or can't tell which repository it targets.
-- Also checks large `Write` tool payloads for size impact and near-duplicates (unless the target is gitignored).
-- **Doesn't modify your repository**: no objects are written, no index refresh, and no network access.
+**This is a placeholder, not a recorded demo.** The following is an illustrative denial, not captured output:
 
----
+```text
+Denied: adding model.bin would exceed the repository-growth threshold.
+Use Git LFS for large binary files, for example: git lfs track "*.bin"
+```
 
-## Requirements
+<details>
+<summary>Try the demo or check a threshold locally</summary>
 
-- `git` (2.44+ for partial clones: older versions ignore `GIT_NO_LAZY_FETCH`, so a treeless clone may fetch trees)
-- Go 1.22+ so the plugin can build its `gitsize` binary from source on first use (offline, with `GOPROXY=off` and `GOTOOLCHAIN=local`). Without Go, point `GITSIZE_BIN` at a `gitsize` binary you built yourself.
-- Git Bash on Windows. The hook explicitly selects Claude Code's Bash shell so it does not resolve a WSL `bash.exe` from `PATH`.
+Run [scripts/demo-setup.sh](scripts/demo-setup.sh). It creates an isolated repository with a baseline commit and settings that register this checkout's hook. Open Claude Code in the directory it prints, then ask it to create a 150 MB dummy file and commit it. The expected result is a denial; a compound creation-and-commit command must first be split into separate commands. **This workflow has not been verified in a live Claude Code session.**
 
-## Installing as a plugin
+For a CLI check, build the binary as shown below, then use a scratch repository:
 
-This repository is both the plugin and its marketplace (`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `hooks/hooks.json`).
+```bash
+GUARD="$PWD"
+cd "$(mktemp -d)" && git init -q
+"$GUARD/scripts/make-large-file.sh" 150 test_model.bin
+"$GUARD/bin/gitsize" analyze --file test_model.bin
+```
 
-### From GitHub (marketplace)
+You can also send a simulated PreToolUse JSON payload to [hooks/pretooluse-gitsize.sh](hooks/pretooluse-gitsize.sh), with `tool_name: "Bash"`, `tool_input.command: "git add test_model.bin"`, and `cwd` set to the scratch repository's absolute path.
+
+</details>
+
+## Features
+
+- Blocks oversized `Write` payloads and `git add` / `git commit` operations.
+- Detects exact content reuse against `HEAD` so eligible duplicate blobs add zero measured growth.
+- Warns about near-duplicates of another HEAD path (**v0.3.0**, advisory only).
+- Measures Git LFS pointers without executing the LFS filter.
+- Never writes objects or refreshes the index in your repository's `.git` directory.
+- Uses deterministic measurements and chunking; no AI participates in measuring content. Time budgets can affect whether an advisory completes.
+
+<details>
+<summary>Supported command forms</summary>
+
+Static parsing handles file paths, directories, globs, `git add .`, `-A`, `-u`, `--renormalize`, `git commit`, `-a`, and commit paths. It also recognizes `git -C`, `--work-tree` with its own `.git`, Git aliases, `cd dir && ...`, and `cd "$(git rev-parse --show-toplevel)"`.
+
+Inline shell forms include `sh -c`, `bash` heredocs, and Claude Code's `git commit -m "$(cat <<'EOF' ... EOF)"` pattern. Ambiguous selections are estimated and surfaced through an `ask`; parsing is best-effort.
+
+</details>
+
+## Install
+
+Add the marketplace, then install the plugin:
 
 ```text
 /plugin marketplace add ratuhin1122/gitsize-guard
 /plugin install gitsize-guard@gitsize-guard-marketplace
 ```
 
-### Local checkout
+**Requirements:** Git and Go **1.22+**, or an absolute `GITSIZE_BIN` path to a binary you built yourself. **Windows requires Git Bash.** Git **2.44+** is needed to prevent lazy fetching in partial clones; older versions ignore `GIT_NO_LAZY_FETCH`, so treeless clones may fetch trees.
+
+The first Git command builds the binary offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) into `${CLAUDE_PLUGIN_DATA}`. Source changes trigger a rebuild. This repository contains both the [plugin](.claude-plugin/plugin.json) and its [marketplace](.claude-plugin/marketplace.json), with [hook registration](hooks/hooks.json).
+
+<details>
+<summary>Local checkout and manual installation</summary>
+
+To load a checkout through the plugin manager:
 
 ```bash
 claude --plugin-dir /absolute/path/to/gitsize-guard
 ```
 
-The first git command after installing builds `gitsize` into the plugin's data directory (`${CLAUDE_PLUGIN_DATA}`); it is rebuilt automatically when the plugin's source changes.
-
----
-
-## Manual installation (without the plugin manager)
-
-Register the hook script **from your gitsize-guard checkout** (don't copy it into other repositories) in `~/.claude/settings.json` or a project's `.claude/settings.json`:
+Alternatively, register the script **from your trusted gitsize-guard checkout** in `~/.claude/settings.json` or a project's `.claude/settings.json`. Do not copy the script into other repositories.
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/absolute/path/to/gitsize-guard/hooks/pretooluse-gitsize.sh\"",
-            "shell": "bash",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
+    "PreToolUse": [{
+      "matcher": "Bash|Write",
+      "hooks": [{
+        "type": "command",
+        "command": "\"/absolute/path/to/gitsize-guard/hooks/pretooluse-gitsize.sh\"",
+        "shell": "bash",
+        "timeout": 30
+      }]
+    }]
   }
 }
 ```
 
-> **Note:** If the settings file already has hooks, merge this entry into the existing `"PreToolUse"` array rather than overwriting it. Keep the quotes around the path: unquoted paths containing spaces silently disable the hook.
+Merge this entry into an existing `PreToolUse` array; do not overwrite other hooks. Keep the escaped quotes around paths containing spaces, or the hook may silently fail. `"shell": "bash"` selects Git Bash on Windows instead of resolving a WSL `bash.exe` from `PATH`.
 
-This repository's own `.claude/settings.json` does the same for sessions opened in the checkout, using `"$CLAUDE_PROJECT_DIR"`.
+The checkout's own [.claude/settings.json](.claude/settings.json) uses `$CLAUDE_PROJECT_DIR`. Start a new Claude Code session after changing hook settings.
 
-Restart or start a new Claude Code session for the hook configuration to take effect.
+</details>
 
----
+## How it works
+
+```text
+Claude Code Bash / Write call
+             |
+        PreToolUse hook
+             |
+          Go CLI ---> Git: paths, sizes, HEAD blobs
+             |
+      measure + assess risk
+             |
+  deny / ask / normal permission flow
+```
+
+Growth means **uncompressed new blob bytes**, counted per repository; it is not a prediction of packed disk usage. Git LFS content counts as its pointer. Other filters and working-tree encodings are measured in a temporary object directory outside the repository.
+
+| Situation | Decision |
+| --- | --- |
+| Exact growth reaches 100 MB (default) | `deny` |
+| Exact growth reaches 50 MB (default) | `ask` |
+| Estimated growth reaches a threshold | `ask` |
+| Near-duplicate found while size risk is low | `ask`; growth stays unchanged |
+| Files/index change before staging or committing in the same command | `deny`; run the Git step separately |
+| Unresolved repository or Git analysis error | Usually `ask`; see failure modes below |
+| No actionable risk | No output; normal Claude Code permissions apply |
+
+The hook **never emits `allow`**. Reasons accompany `deny` and `ask` decisions, including near-duplicate advice. Gitignored `Write` targets are skipped.
+
+<details>
+<summary>Measurement details, CLI, and security model</summary>
+
+Plain files under 1 MiB count at face value without hashing. Larger files are hashed to detect reuse in `HEAD`; after 1 GiB of hashing per check, remaining files count at face value. Non-LFS filters run for up to 64 files of at least 1 MiB per check; remaining filtered files count at working-tree size. Your filter commands can still have their own side effects.
+
+A command such as `dd ... && git add model.bin && git commit`, or `git stash pop && git commit`, changes files or the index before the guard can measure them. It is denied with instructions to run the Git step separately. Branch creation (`git checkout -b`), tests, and checksums do not count as those mutations.
+
+Build and inspect JSON reports directly:
+
+```bash
+go build -o bin/gitsize ./cmd/gitsize
+./bin/gitsize analyze --file model.bin --file assets/video.mp4
+./bin/gitsize analyze --staged
+./bin/gitsize analyze --pending --failure-mb 200
+```
+
+File paths are relative to the current directory. `--staged` checks what a commit would record; `--pending` checks pending additions. `analyze` exits `0` for low/medium risk, `1` for high risk, and `2` for errors. `gitsize hook` is the PreToolUse entry point; its protocol uses exit `0` with a decision or empty output.
+
+The shim runs binaries only from an absolute `GITSIZE_BIN`, its trusted source build, or an absolute `PATH` entry. Relative `PATH` entries are removed before resolving tools. Keep your own `PATH` entries absolute.
+
+Source builds are cached per checkout and isolated from `GOOS`, `GOARCH`, `GOFLAGS`, `go.work`, saved `go env -w` settings, and VCS stamping. Every Git call sets `GIT_NO_LAZY_FETCH=1` and `GIT_OPTIONAL_LOCKS=0`; the analyzer avoids object writes and index refreshes in the repository.
+
+</details>
 
 ## Configuration
 
-Set these in the environment Claude Code runs in (commands Claude runs cannot change them):
+Defaults: **50 MB warning**, **100 MB block**, and near-duplicate detection enabled at **90% similarity** for files of **5 MiB or more**. Size options named `MB` use 1,048,576 bytes (MiB).
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `GITSIZE_WARNING_MB` | `50` | Growth at which you're asked to confirm |
-| `GITSIZE_FAILURE_MB` | `100` | Growth at which the command is denied |
-| `GITSIZE_BIN` | — | Absolute path to a `gitsize` binary to use instead of building one |
+Set environment variables **before launching Claude Code**. Commands run by Claude cannot change the hook's parent environment. Explicit flags override the corresponding environment variable independently; the threshold and near-duplicate flags work with both `analyze` and `hook`.
 
-Setting only one threshold moves the other to meet it: `GITSIZE_FAILURE_MB=40` on its own also lowers the warning to 40 MB. An invalid value is replaced by its default (valid settings are kept) and reported on the next git staging command, rather than silently ignored.
+<details>
+<summary>All configuration flags and environment variables</summary>
 
-## Near-duplicate detection
-
-gitsize-guard warns when a large file shares most of its content with another path already in `HEAD`. It uses deterministic content-defined chunks to recognize modified copies, including copies with inserted bytes. Similarity is the fraction of the new file's bytes covered by matching chunks, respecting repeated-chunk counts. It checks working-tree files, staged blobs, and the content supplied by `Write` tool calls.
-
-Detection is enabled by default for files of at least **5 MiB**, with a **0.90** similarity threshold. It compares up to five HEAD candidates between half and twice the new file's size, ordered by size proximity and then path, and skips Git LFS pointer files. Checks share a **512 MiB** read allowance and a **5-second** deadline; skipped candidates are reported in `notes`.
-
-| CLI flag | Environment variable | Default | Accepted values |
+| CLI flag | Environment variable | Default | Meaning / accepted values |
 | --- | --- | --- | --- |
-| `--near-dup=<bool>` | `GITSIZE_NEARDUP` | `true` / `1` | Flag: `true` or `false`; environment: `0` or `1` |
-| `--near-dup-threshold <float>` | `GITSIZE_NEARDUP_THRESHOLD` | `0.90` | `0.5` through `1.0`, inclusive |
-| `--near-dup-min-mb <int>` | `GITSIZE_NEARDUP_MIN_MB` | `5` | Positive whole MiB, at most `1048576` |
+| `--warning-mb` | `GITSIZE_WARNING_MB` | `50` | Growth that triggers confirmation |
+| `--failure-mb` | `GITSIZE_FAILURE_MB` | `100` | Exact growth that triggers denial |
+| `--near-dup=<bool>` | `GITSIZE_NEARDUP` | `true` / `1` | Flag: `true` / `false`; env: `0` / `1` |
+| `--near-dup-threshold` | `GITSIZE_NEARDUP_THRESHOLD` | `0.90` | Finite number from `0.5` to `1.0` |
+| `--near-dup-min-mb` | `GITSIZE_NEARDUP_MIN_MB` | `5` | Whole MiB, `1`–`1048576` |
+| — | `GITSIZE_BIN` | — | Absolute path to a trusted binary instead of building |
 
-Flags override their corresponding environment settings independently and work with both `gitsize analyze` and `gitsize hook`. For example:
+Setting only one size threshold moves the other to meet it if necessary: `GITSIZE_FAILURE_MB=40` alone lowers the warning to 40 MB.
+
+Invalid settings make `analyze` return an error. The hook keeps valid settings, substitutes defaults for invalid ones, and surfaces configuration errors through an `ask` on staging or `Write` calls. An existing `deny` stays a `deny`.
 
 ```bash
 gitsize analyze --pending --near-dup-threshold 0.95 --near-dup-min-mb 12
 gitsize analyze --pending --near-dup=false
 ```
 
-Invalid settings cause `analyze` to exit with an error. The hook retains valid settings, substitutes defaults for invalid ones, and surfaces the configuration error through an `ask` on staging or Write calls; an existing `deny` remains a `deny`.
+</details>
 
-A match adds `near_duplicate` metadata to the per-file JSON result, a report-level `near_duplicates` count, and a reason such as "copy.bin is ~94% identical to original.bin already in HEAD". Low risk becomes medium so the hook asks for confirmation; medium and high risk retain their level. The reason recommends replacing the existing file rather than adding a copy, or tracking versions with Git LFS or external storage. Updating the same HEAD path does not count as adding a duplicate.
+## Near-duplicate detection
 
-### Limitations
+The analyzer compares large working-tree files, staged blobs, and `Write` content with **another path in HEAD**. Deterministic content-defined chunks recognize shared content even after insertions. Similarity is the fraction of new-file bytes covered by matching chunks, respecting the multiplicity of old chunks. Updating the same HEAD path does not count as adding a duplicate.
 
-- Compares against **HEAD only**, not other staged files or older history.
-- Already-compressed formats such as ZIP, MP4, and some model formats may share few chunks even when their contents are semantically similar.
-- **Advisory only**: similarity never reduces `growth_bytes`, never lowers risk, and never raises risk to high. Existing size-based denials remain in effect.
-- Does not replace Git's own pack delta compression. Chunk similarity is a content-overlap advisory, not a prediction of packed repository size.
+This is **advisory only**: it never reduces `growth_bytes`, lowers risk, or raises risk to high. A match raises low risk to medium, causing an `ask`; medium and high risk retain their level. The reason recommends replacing the existing file rather than adding a copy, or tracking versions with Git LFS / external storage.
 
-## How decisions are made
+<details>
+<summary>Candidates, budgets, and JSON output</summary>
 
-| Situation | Hook output |
-| --- | --- |
-| Exact growth ≥ failure threshold | `deny`: the command is blocked and the reason is shown to Claude |
-| Files or the index are changed, then staged or committed, in the same command | `deny`, telling Claude to run the git step separately |
-| Estimated growth (the command's file set couldn't be determined) ≥ a threshold | `ask`: you're asked to confirm, with the reason |
-| Exact growth ≥ warning threshold | `ask` |
-| A near-duplicate of another HEAD path is found while size risk is low | `ask` (advisory; measured growth is unchanged) |
-| A git staging command whose repository it can't determine, or a `git` error | `ask` (such notes are also appended to any other decision) |
-| No `gitsize` binary available | `ask` on git staging commands, saying the guard is inactive |
-| Anything else | no output: Claude Code's normal permission flow applies |
-| `gitsize` crashes or times out | no output (fails open) |
+At most five HEAD candidates are compared, with sizes from half to twice the new file's size, ordered by size proximity and then path. Git LFS pointers are skipped. Checks share a **512 MiB read budget** and a **5-second production deadline**. Budget limits and unavailable local blobs cause skips with human-readable `notes` in the CLI report, rather than analysis failure.
 
-The hook never emits `allow`, so it can't bypass your permission settings.
+Matches add per-file `near_duplicate` metadata (`path`, `similarity`, `shared_bytes`, `candidate_size`) and a report-level `near_duplicates` count. Reasons include sentences such as “copy.bin is ~94% identical to original.bin already in HEAD”.
 
-"Growth" is the uncompressed size of the new blobs, which is what GitHub's per-file limit applies to, counted per repository. Files under 1 MiB are counted at their size without hashing. Larger ones are hashed so that content already in `HEAD` counts as zero; past 1 GiB of hashing per check, further files are counted at their size.
-
-## Security model
-
-The hook only runs a `gitsize` binary from places you control: `GITSIZE_BIN` (absolute paths only), a build of the plugin's own source (cached per checkout, rebuilt when the source changes, built offline, ignoring `GOOS`/`GOARCH`/`GOFLAGS`, `go.work`, `go env -w` settings and VCS stamping), or an absolute `PATH` entry. The shim also drops relative `PATH` entries before running anything, so a cloned repository can't supply the tools it (or `gitsize`) runs. Every git call runs with `GIT_NO_LAZY_FETCH=1`.
-
-Claude Code starts the hook directly with its configured Bash shell. On Windows, `shell: "bash"` selects Git Bash instead of launching a second `bash.exe` from `PATH`, which avoids accidentally crossing into WSL. Once the script starts, it drops relative `PATH` entries before resolving any tool. Keep your own `PATH` entries absolute for defense in depth and for other hooks that invoke commands by name.
+</details>
 
 ## Limitations
 
-- The hook can **fail open** (empty output, exit `0`). If the binary crashes or times out, the shim emits no decision. If a near-duplicate check reaches its five-second budget while measured size risk remains low, the advisory is skipped and the hook can also emit no decision; the skip note remains in the CLI report. Existing size-based warning and denial thresholds still apply when their measurements complete.
-- A missing or inaccessible working directory can also produce no hook decision: repository lookup errors are currently treated as selections outside a Git work tree. The earlier intermittent empty decisions were not conclusively traced to machine load, and this behavior remains unchanged.
-- Command analysis is static and best-effort. When a command stages files it can't pin down, it estimates from everything pending in the repository and asks rather than skipping the check.
-- Commands that commit through something opaque aren't seen: a script file (`bash release.sh`), `make`, or an `npm run` script that runs git internally. Such commands are assumed to change files but not the index, so `npm run build && git commit -m x` isn't blocked.
-- `git merge`, `git cherry-pick`, `git am` and `git revert` create commits without a separate `git commit`, so they aren't checked, and neither is `git commit-tree`. Content they (or `git apply --cached`, `git stash pop`, `git update-index`) put in the index is checked by a later `git commit`, which is denied if it's in the same command line.
-- Each `git add` is judged on its own, while `git commit` is judged on everything staged. Two approved warning-level adds can therefore add up to a denied commit.
-- The `Edit` tool isn't checked (edits can't realistically create files this large), and neither are commits made outside Claude Code. For those, pair this with a git `pre-commit` hook such as `gitsize analyze --staged`.
-- Deduplication is against `HEAD` only, not all of history.
-- Filters other than Git LFS are run (into a throwaway object directory) to measure their output, for up to 64 files of 1 MiB or more per check, so whatever side effects your own filter commands have still happen. Other filtered files count at their working-tree size.
+- Only Claude Code **Bash and Write tool calls** trigger the hook. Manual Git commits and the `Edit` tool bypass it. For external commits, consider a separate pre-commit check using `gitsize analyze --staged`.
+- Bash detection uses **static, best-effort parsing**. Ambiguous selections are estimated from pending files and prompt for confirmation.
+- Duplicate detection compares against **HEAD only**, not other staged files or older history.
+- Already-compressed ZIP, MP4, and some model formats may share few chunks despite semantic similarity. Chunk overlap does not replace Git's pack delta compression.
+- The hook **can fail open**: a crash or timeout can produce empty output with exit `0`. A skipped near-duplicate advisory can also leave no decision when measured size risk is low; completed size checks still apply.
+- Windows test-suite gaps are tracked in [issue #2](https://github.com/ratuhin1122/gitsize-guard/issues/2). See [VERIFICATION.md](VERIFICATION.md) for recorded checks.
+- **Not yet tested in a live Claude Code session.** The demo remains a placeholder.
 
----
+<details>
+<summary>Additional bypasses and failure modes</summary>
 
-## CLI
+- Missing or inaccessible working directories can yield no decision because repository lookup errors are treated as selections outside a Git work tree. Earlier intermittent empty decisions were not conclusively traced to machine load.
+- If no binary is available, staging commands receive an `ask` explaining that the guard is inactive. A crashing or timed-out binary instead fails open.
+- Opaque scripts (`bash release.sh`), `make`, and npm scripts that call Git internally are not inspected. They are assumed to change files, but not the index; `npm run build && git commit -m x` is therefore not blocked as a compound mutation.
+- `git merge`, `cherry-pick`, `am`, `revert`, and `commit-tree` can create commits without a separate checked `git commit`.
+- Content placed in the index by those operations, `git apply --cached`, `git stash pop`, or `git update-index` is checked by a later `git commit`; known index mutations followed by commit in the same command are denied.
+- Each `git add` is judged separately. Multiple approved additions can still produce a denied combined commit.
+- Non-LFS filters execute in a temporary object directory, but their own commands can have side effects. Older Git versions can still fetch trees in partial clones (see requirements).
 
-```bash
-go build -o bin/gitsize ./cmd/gitsize
+</details>
 
-# One or more files (paths relative to the current directory)
-./bin/gitsize analyze --file model.bin --file assets/video.mp4
+## Roadmap
 
-# What `git commit` would record, or everything `git add -A && git commit` would
-./bin/gitsize analyze --staged
-./bin/gitsize analyze --pending --failure-mb 200
-```
+- Verify the plugin in a live Claude Code session and record the demo.
+- Address the Windows test-suite gaps in issue #2.
+- Add generated-file awareness for directories such as `dist`, `build`, and `coverage`.
+- Explore historical repository-growth tracking.
 
-`analyze` prints a JSON report and exits `0` for low/medium risk, `1` for high risk, and `2` on errors. `gitsize hook` is the PreToolUse entry point used by `hooks/pretooluse-gitsize.sh`.
+## Contributing
 
-## Demo
+Fork the repository, create a branch, and open a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for formatting and verification commands.
 
-1. **Setup demo repository**:
-   ```bash
-   ./scripts/demo-setup.sh
-   ```
-   This creates an isolated Git repository with a baseline commit and a `.claude/settings.json` that registers this checkout's hook.
+## Credits
 
-2. **Run Claude Code** in the directory it prints:
-   ```bash
-   cd /path/to/demo/repo
-   claude
-   ```
+Thanks to **ZAG23** for the v0.2.0 security and correctness work in [PR #1](https://github.com/ratuhin1122/gitsize-guard/pull/1). See [CHANGELOG.md](CHANGELOG.md) for release history.
 
-3. **Trigger the guard** by asking:
-   > *"create a 150MB dummy file called model.bin and commit it"*
+## License
 
-4. **Expected behavior**: the `git add` / `git commit` command is denied with the size, the offending file, and a Git LFS recommendation. If Claude creates and commits the file in one command, it's told to run the git step separately first, and that is then denied the same way. Retrying is denied again, and Claude Code adapts its plan instead of bloating the repository history.
-
-### Manual threshold testing
-
-Use a scratch repository so the test file doesn't end up in this checkout:
-
-```bash
-# A scratch repository with a 150MB test file
-GUARD="$PWD"; cd "$(mktemp -d)" && git init -q
-"$GUARD/scripts/make-large-file.sh" 150 test_model.bin
-
-# Run the CLI directly
-"$GUARD/bin/gitsize" analyze --file test_model.bin
-
-# Run the hook with a simulated Claude Code payload
-echo '{"tool_name":"Bash","tool_input":{"command":"git add test_model.bin"},"cwd":"'"$PWD"'"}' | "$GUARD/hooks/pretooluse-gitsize.sh"
-```
-
-## Development
-
-```bash
-go test ./...          # includes an end-to-end test of the hook script
-go test -short ./...   # skips the test that builds the binary through the hook script
-```
+[MIT](LICENSE).
