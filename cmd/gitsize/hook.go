@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ratuhin1122/gitsize-guard/internal/analyzer"
 	"github.com/ratuhin1122/gitsize-guard/internal/hookio"
@@ -21,13 +23,24 @@ const maxListed = 5
 // broken guard must not block unrelated work. It prints a "deny" or "ask"
 // decision (see evaluate), or nothing.
 func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runHookWithTimeBudget(args, stdin, stdout, stderr, 0)
+}
+
+// runHookWithTimeBudget allows callers to override only the advisory deadline;
+// flags, environment validation and permission decisions use the normal path.
+func runHookWithTimeBudget(args []string, stdin io.Reader, stdout, stderr io.Writer, budget time.Duration) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	warningMB, failureMB := thresholdFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	nearDup := nearDupFlags(fs)
+	parseErr := fs.Parse(args)
+	if errors.Is(parseErr, flag.ErrHelp) {
 		return 0
 	}
 	thresholds, configErr := resolveThresholds(fs, *warningMB, *failureMB)
+	cfg, nearDupErr := resolveNearDup(fs, nearDup)
+	cfg.TimeBudget = budget
+	configErr = errors.Join(parseErr, configErr, nearDupErr)
 	if configErr != nil {
 		fmt.Fprintf(stderr, "gitsize-guard: %v\n", configErr)
 	}
@@ -38,16 +51,16 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	decision, reason, growth := evaluate(in, thresholds)
+	decision, reason, _ := evaluateWithNearDup(in, thresholds, cfg)
 	if configErr != nil {
-		note := fmt.Sprintf("gitsize-guard configuration error: %v. Using warning %s / failure %s instead.",
-			configErr, analyzer.HumanReadableSize(thresholds.WarningBytes), analyzer.HumanReadableSize(thresholds.FailureBytes))
+		note := fmt.Sprintf("gitsize-guard configuration error: %v. Using warning %s / failure %s; near-dup=%t, threshold=%.2f, minimum=%s instead.",
+			configErr, analyzer.HumanReadableSize(thresholds.WarningBytes), analyzer.HumanReadableSize(thresholds.FailureBytes), cfg.Enabled, cfg.Threshold, analyzer.HumanReadableSize(cfg.MinBytes))
 		switch {
 		case decision != "":
 			reason += "\n(" + note + ")"
-		case stagesContent(in):
+		case stagesContent(in) || (in.ToolName == "Write" && in.ToolInput.FilePath != ""):
 			decision = hookio.Ask
-			reason = fmt.Sprintf("%s This command would add %s to the repository.", note, analyzer.HumanReadableSize(growth))
+			reason = note
 		}
 	}
 	if decision != "" {
@@ -69,6 +82,10 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 //     warning threshold, or when part of the command can't be analyzed;
 //   - otherwise say nothing.
 func evaluate(in hookio.Input, th analyzer.Thresholds) (hookio.Decision, string, int64) {
+	return evaluateWithNearDup(in, th, analyzer.DefaultNearDupConfig())
+}
+
+func evaluateWithNearDup(in hookio.Input, th analyzer.Thresholds, cfg analyzer.NearDupConfig) (hookio.Decision, string, int64) {
 	cwd := in.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -91,8 +108,8 @@ func evaluate(in hookio.Input, th analyzer.Thresholds) (hookio.Decision, string,
 				exactSels = append(exactSels, s)
 			}
 		}
-		exact, errExact := analyzer.Analyze(exactSels, th)
-		est, errEst := analyzer.Analyze(estSels, th)
+		exact, errExact := analyzer.AnalyzeWithNearDup(exactSels, th, cfg)
+		est, errEst := analyzer.AnalyzeWithNearDup(estSels, th, cfg)
 		err := errors.Join(errExact, errEst)
 
 		var notes []string
@@ -103,6 +120,16 @@ func evaluate(in hookio.Input, th analyzer.Thresholds) (hookio.Decision, string,
 			notes = append(notes, fmt.Sprintf("Could not fully check: %v", err))
 		}
 		withNotes := func(reason string) string {
+			// Whichever size verdict wins, retain advisories from both reports.
+			for _, report := range []*analyzer.Report{exact, est} {
+				if report.NearDuplicates > 0 {
+					for _, advisory := range report.Reasons {
+						if strings.Contains(advisory, "already in HEAD") && !strings.Contains(reason, advisory) {
+							reason += "\n" + advisory
+						}
+					}
+				}
+			}
 			if len(notes) == 0 {
 				return reason
 			}
@@ -126,7 +153,7 @@ func evaluate(in hookio.Input, th analyzer.Thresholds) (hookio.Decision, string,
 		return "", "", exact.GrowthBytes
 
 	case "Write":
-		report, exact, err := analyzeWrite(in.ToolInput, cwd, th)
+		report, exact, err := analyzeWriteWithNearDup(in.ToolInput, cwd, th, cfg)
 		switch {
 		case err != nil:
 			return hookio.Ask, fmt.Sprintf("gitsize-guard could not check how much this file adds to the repository: %v", err), 0
@@ -165,11 +192,15 @@ func unseenReason(r *analyzer.Report, th analyzer.Thresholds) string {
 }
 
 // analyzeWrite checks the content a Write call is about to put in a file.
-// Content below the warning threshold costs no git calls at all. exact is
+// Content below both the warning and near-duplicate minimum costs no git calls. exact is
 // false when a filter other than Git LFS applies to the path.
 func analyzeWrite(ti hookio.ToolInput, cwd string, th analyzer.Thresholds) (*analyzer.Report, bool, error) {
+	return analyzeWriteWithNearDup(ti, cwd, th, analyzer.DefaultNearDupConfig())
+}
+
+func analyzeWriteWithNearDup(ti hookio.ToolInput, cwd string, th analyzer.Thresholds, cfg analyzer.NearDupConfig) (*analyzer.Report, bool, error) {
 	size := int64(len(ti.Content))
-	if risk, _ := analyzer.ClassifyRisk(size, th); risk == analyzer.RiskLow || ti.FilePath == "" {
+	if risk, _ := analyzer.ClassifyRisk(size, th); (risk == analyzer.RiskLow && (!cfg.Enabled || size < cfg.MinBytes)) || ti.FilePath == "" {
 		return nil, true, nil
 	}
 
@@ -213,7 +244,10 @@ func analyzeWrite(ti hookio.ToolInput, cwd string, th analyzer.Thresholds) (*ana
 		IsBinary:    analyzer.ContainsNUL([]byte(ti.Content[:min(len(ti.Content), 8000)])),
 		ChangeType:  analyzer.ChangeAdded,
 	}
-	return analyzer.NewReport([]analyzer.FileImpact{impact}, th), exact, nil
+	notes := analyzer.CheckNearDuplicate(root, &impact, bytes.NewReader([]byte(ti.Content)), cfg)
+	report := analyzer.NewReport([]analyzer.FileImpact{impact}, th)
+	report.Notes = notes
+	return report, exact, nil
 }
 
 // relToRoot returns path relative to root, where dir is an existing ancestor
@@ -258,29 +292,34 @@ const (
 func describe(r *analyzer.Report, th analyzer.Thresholds, v verdict) string {
 	var b strings.Builder
 	size := analyzer.HumanReadableSize
-	switch v {
-	case blocked:
-		fmt.Fprintf(&b, "gitsize-guard blocked this: it would add %s to the repository (failure threshold %s).",
-			size(r.GrowthBytes), size(th.FailureBytes))
-	case estimated, estimatedWarning:
-		limit, name := th.FailureBytes, "failure"
-		if v == estimatedWarning {
-			limit, name = th.WarningBytes, "warning"
+	sizeRisk, _ := analyzer.ClassifyRisk(r.GrowthBytes, th)
+	if r.NearDuplicates > 0 && sizeRisk == analyzer.RiskLow && (v == warning || v == writeWarning || v == estimatedWarning) {
+		b.WriteString("gitsize-guard found a possible duplicate of a file already in HEAD.")
+	} else {
+		switch v {
+		case blocked:
+			fmt.Fprintf(&b, "gitsize-guard blocked this: it would add %s to the repository (failure threshold %s).",
+				size(r.GrowthBytes), size(th.FailureBytes))
+		case estimated, estimatedWarning:
+			limit, name := th.FailureBytes, "failure"
+			if v == estimatedWarning {
+				limit, name = th.WarningBytes, "warning"
+			}
+			fmt.Fprintf(&b, "gitsize-guard can't tell exactly which files this command stages. Everything pending in the repository adds up to %s (%s threshold %s).",
+				size(r.GrowthBytes), name, size(limit))
+		case warning:
+			fmt.Fprintf(&b, "gitsize-guard: this would add %s to the repository (warning threshold %s).",
+				size(r.GrowthBytes), size(th.WarningBytes))
+		case writeBlocked:
+			fmt.Fprintf(&b, "gitsize-guard blocked this: writing this file would add %s to the repository once committed (failure threshold %s).",
+				size(r.GrowthBytes), size(th.FailureBytes))
+		case writeEstimated:
+			fmt.Fprintf(&b, "gitsize-guard: git filters or re-encodes this path, so its stored size isn't known; the content is %s (failure threshold %s).",
+				size(r.GrowthBytes), size(th.FailureBytes))
+		case writeWarning:
+			fmt.Fprintf(&b, "gitsize-guard: writing this file would add %s to the repository once committed (warning threshold %s).",
+				size(r.GrowthBytes), size(th.WarningBytes))
 		}
-		fmt.Fprintf(&b, "gitsize-guard can't tell exactly which files this command stages. Everything pending in the repository adds up to %s (%s threshold %s).",
-			size(r.GrowthBytes), name, size(limit))
-	case warning:
-		fmt.Fprintf(&b, "gitsize-guard: this would add %s to the repository (warning threshold %s).",
-			size(r.GrowthBytes), size(th.WarningBytes))
-	case writeBlocked:
-		fmt.Fprintf(&b, "gitsize-guard blocked this: writing this file would add %s to the repository once committed (failure threshold %s).",
-			size(r.GrowthBytes), size(th.FailureBytes))
-	case writeEstimated:
-		fmt.Fprintf(&b, "gitsize-guard: git filters or re-encodes this path, so its stored size isn't known; the content is %s (failure threshold %s).",
-			size(r.GrowthBytes), size(th.FailureBytes))
-	case writeWarning:
-		fmt.Fprintf(&b, "gitsize-guard: writing this file would add %s to the repository once committed (warning threshold %s).",
-			size(r.GrowthBytes), size(th.WarningBytes))
 	}
 	if v == blocked {
 		b.WriteString(" This was measured before the command runs, so a fix made earlier in the same command (.gitignore, git lfs track, " +
@@ -311,6 +350,14 @@ func describe(r *analyzer.Report, th analyzer.Thresholds, v verdict) string {
 	}
 	if r.Recommendation != "" {
 		fmt.Fprintf(&b, "\nRecommendation: %s", r.Recommendation)
+	}
+	if r.NearDuplicates > 0 {
+		for _, reason := range r.Reasons {
+			fmt.Fprintf(&b, "\n%s", reason)
+		}
+	}
+	for _, note := range r.Notes {
+		fmt.Fprintf(&b, "\n%s", note)
 	}
 	return b.String()
 }

@@ -254,3 +254,520 @@ stdout: {"permissionDecision":"deny","permissionDecisionReason":"... failure thr
 ## Conclusion
 
 All 11 claimed fixes from PR #1 have been independently verified against the merged `main` branch with actual command output as evidence. Every test produced the expected behavior. The security model, threshold validation, command parsing, and file analysis all function correctly on Windows.
+
+---
+
+## v0.3.0 verification — 2026-10-20
+
+**Scope:** Automated Go integration tests and CLI validation on Windows/amd64, using `go version go1.27.0 windows/amd64` and `git version 2.44.0.windows.1`. Commands below run from the repository root in PowerShell.
+
+**Not tested in a live Claude Code session.** Hook payload tests exercise the Go entry point; they do not establish that an installed plugin has been exercised interactively in Claude Code.
+
+### Near-duplicate, negative cases, budgets, and repository preservation
+
+The test creates a temporary Git repository and commits a deterministic 12 MiB `math/rand` file (seed `2026`). The modified copy changes a contiguous 5% region and inserts 200 bytes in its middle. An unrelated 12 MiB file uses seed `99`; the small copy is a 1 MiB prefix of the original. The default 5 MiB minimum and 0.90 similarity threshold are used.
+
+The budget case injects a reduced allowance of 25,166,023 bytes into the production check: new-file reading fits, but reading the HEAD candidate would exceed the remainder. This exercises the skip note without allocating a 512 MiB fixture; the production default remains 512 MiB. The test checks that the skip is not returned as an analysis error and does not change growth.
+
+Before and after each analysis, and around the whole sequence, the test compares SHA-256 checksums keyed by relative path for every file under `.git`, including the index, config, refs, reflogs, and objects. This detects created, removed, and changed files, rather than checking only object counts.
+
+The deadline regression test confirms that cancellation interrupts a blocked candidate-stream read. Stream cancellation closes the read pipe as well as killing the launcher, and subprocess waiting is bounded when inherited pipes remain open.
+
+Exact command:
+
+```powershell
+go test -count=1 -race -v ./internal/analyzer -run '^TestNearDup(ReadOnlyIntegration|StreamDeadlineInterruptsRead)$'
+```
+
+Actual output:
+
+```text
+=== RUN   TestNearDupReadOnlyIntegration
+=== RUN   TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion
+    neardup_readonly_test.go:136: file=modified-copy.bin size=12583112 growth_bytes=12583112 near_duplicates=1
+    neardup_readonly_test.go:146: near_duplicate path=original.bin similarity=0.947235 shared_bytes=11919168 candidate_size=12582912
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/unrelated_random_file
+    neardup_readonly_test.go:136: file=unrelated.bin size=12582912 growth_bytes=12582912 near_duplicates=0
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum
+    neardup_readonly_test.go:136: file=small-copy.bin size=1048576 growth_bytes=1048576 near_duplicates=0
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget
+    neardup_readonly_test.go:177: budget_note="Skipped near-duplicate candidate \"original.bin\": near-duplicate byte budget reached." error=<nil> growth_bytes=12583112
+    neardup_readonly_test.go:178: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== NAME  TestNearDupReadOnlyIntegration
+    neardup_readonly_test.go:179: git_unchanged=true files=29 (SHA-256 of every .git file)
+--- PASS: TestNearDupReadOnlyIntegration (14.46s)
+    --- PASS: TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion (3.79s)
+    --- PASS: TestNearDupReadOnlyIntegration/unrelated_random_file (3.78s)
+    --- PASS: TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum (0.90s)
+    --- PASS: TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget (1.65s)
+=== RUN   TestNearDupStreamDeadlineInterruptsRead
+--- PASS: TestNearDupStreamDeadlineInterruptsRead (1.01s)
+PASS
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	18.030s
+
+```
+
+### Full race suite compared with the pre-change baseline
+
+The pre-change baseline remains outside Git at `$env:TEMP\gitsize-guard-v030-baseline-failures.txt`. The comparison uses leaf test names, excluding parent failures that merely summarize failed subtests. It separately rejects timeouts, panics, and data-race reports. An exit code of 1 from the Go suite is expected when the known Windows baseline failures remain; it must not be described as a clean full-suite pass.
+
+Exact PowerShell commands used for the comparison:
+
+```powershell
+$baselinePath = Join-Path $env:TEMP 'gitsize-guard-v030-baseline-failures.txt'
+$raceLog = Join-Path $env:TEMP 'gitsize-guard-v030-race.jsonl'
+& go test -race -json ./... 2>&1 |
+    ForEach-Object { $_.ToString() } |
+    Tee-Object -FilePath $raceLog | Out-Null
+$raceExit = $LASTEXITCODE
+$events = @(Get-Content -LiteralPath $raceLog | ForEach-Object {
+    try { $_ | ConvertFrom-Json } catch {}
+})
+$baseline = @(Get-Content -LiteralPath $baselinePath)
+$names = @($events | Where-Object { $_.Action -eq 'fail' -and $_.Test } |
+    ForEach-Object { $_.Test } | Sort-Object -Unique)
+$leaves = @($names | Where-Object {
+    $name = $_
+    -not ($names | Where-Object { $_.StartsWith($name + '/') })
+})
+$newFailures = @($leaves | Where-Object { $_ -notin $baseline })
+$panics = @($events | Where-Object { $_.Output -match 'panic:|test timed out|fatal error:' })
+$races = @($events | Where-Object { $_.Output -match 'WARNING: DATA RACE' })
+$summary = @(
+    "Race exit code: $raceExit"
+    "Baseline failing leaf tests: $($baseline.Count)"
+    "Observed failing leaf tests: $($leaves.Count)"
+    "New failing leaf tests: $($newFailures.Count)"
+    "Timeouts or panics: $($panics.Count)"
+    "Data race reports: $($races.Count)"
+)
+$newFailures | ForEach-Object { $summary += $_ }
+$passed = $newFailures.Count -eq 0 -and $panics.Count -eq 0 -and
+    $races.Count -eq 0 -and ($raceExit -eq 0 -or $leaves.Count -gt 0)
+if ($passed) { $summary += 'Baseline comparison: PASS' }
+else { $summary += 'Baseline comparison: FAIL' }
+$summary | Set-Content -LiteralPath (Join-Path $env:TEMP 'gitsize-guard-v030-baseline-summary.txt')
+$summary | ForEach-Object { Write-Output $_ }
+```
+Actual comparison output:
+
+```text
+Race exit code: 1
+Baseline failing leaf tests: 14
+Observed failing leaf tests: 14
+New failing leaf tests: 0
+Timeouts or panics: 0
+Data race reports: 0
+Baseline comparison: PASS
+```
+
+**Result:** No new failing leaf tests versus the pre-change baseline. The full Windows suite still exits 1 because its 14 known baseline failures remain. No timeouts, panics, or data-race reports were observed in this acceptance run. The earlier timeout and timing-dependent policy-fixture failure were corrected before this run.
+
+### Formatting, vet, and manifest validation
+
+Exact commands:
+
+```powershell
+go vet ./...
+gofmt -l .
+claude plugin validate . --strict
+claude plugin validate .claude-plugin/plugin.json --strict
+```
+
+`go vet ./...` and `gofmt -l .` both exited 0 with no output. Actual manifest-validation output:
+
+```text
+Validating marketplace manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.claude-plugin\marketplace.json
+
+√ Validation passed
+Validating plugin manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.claude-plugin\plugin.json
+
+√ Validation passed
+```
+
+These results establish automated behavior only. **Live Claude Code session testing has not been performed.**
+
+## v0.3.0 verification update — 2026-10-23
+
+**Not tested in a live Claude Code session.** These are automated Go tests on Windows. The 2026-10-20 passing results above are historical; the latest full race run does **not** satisfy the no-new-failures requirement.
+
+### Current integration output
+
+The existing test still covers the deterministic 12 MiB original, contiguous 5% edit plus 200-byte insertion, unrelated random file, below-minimum 1 MiB copy, byte-budget note, and SHA-256 checksums of every file under `.git`. It has not been regenerated or weakened. The successful near-duplicate result (0.947235 similarity) and unrelated-file negative result above were observed on 2026-10-20; both cases now hit the production five-second time budget. The latest focused run confirms the small-file skip, byte-budget note without an error, unchanged growth, and unchanged contents of all 29 `.git` files.
+
+Exact test command run from the repository root in PowerShell:
+
+```powershell
+go test -count=1 -race -v ./internal/analyzer -run '^TestNearDup(ReadOnlyIntegration|StreamDeadlineInterruptsRead)$'
+```
+
+Actual output (exit 1):
+
+```text
+=== RUN   TestNearDupReadOnlyIntegration
+=== RUN   TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion
+    neardup_readonly_test.go:133: unexpected skipped candidates: [Skipped near-duplicate candidate "original.bin": time budget reached.]
+    panic.go:694: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/unrelated_random_file
+    neardup_readonly_test.go:133: unexpected skipped candidates: [Skipped near-duplicate candidate "original.bin": time budget reached.]
+    panic.go:694: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum
+    neardup_readonly_test.go:136: file=small-copy.bin size=1048576 growth_bytes=1048576 near_duplicates=0
+    neardup_readonly_test.go:147: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget
+    neardup_readonly_test.go:177: budget_note="Skipped near-duplicate candidate \"original.bin\": near-duplicate byte budget reached." error=<nil> growth_bytes=12583112
+    neardup_readonly_test.go:178: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== NAME  TestNearDupReadOnlyIntegration
+    neardup_readonly_test.go:179: git_unchanged=true files=29 (SHA-256 of every .git file)
+--- FAIL: TestNearDupReadOnlyIntegration (29.06s)
+    --- FAIL: TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion (7.16s)
+    --- FAIL: TestNearDupReadOnlyIntegration/unrelated_random_file (6.53s)
+    --- PASS: TestNearDupReadOnlyIntegration/one_MiB_copy_below_minimum (1.22s)
+    --- PASS: TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget (3.89s)
+=== RUN   TestNearDupStreamDeadlineInterruptsRead
+--- PASS: TestNearDupStreamDeadlineInterruptsRead (1.01s)
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/analyzer	32.819s
+FAIL
+
+```
+
+### Latest full-suite baseline comparison
+
+The immediately preceding full-suite command was:
+
+```powershell
+go vet ./...
+go test -race ./...
+```
+
+Vet exited 0 with no output. The race suite exited 1. Its real output was saved outside Git in `readonly-race-2026-10-23.txt`; the original baseline remains outside Git in `baseline-2026-10-23/baseline-failures.txt`. The following exact PowerShell comparison commands were run against those saved outputs:
+
+```powershell
+$verificationRoot = 'C:/Users/FC/.codex/visualizations/2026/10/20/01a15872-8472-7163-93c9-935b36159a26'
+$baseline = @(Get-Content "$verificationRoot/baseline-2026-10-23/baseline-failures.txt")
+$raceLog = "$verificationRoot/readonly-race-2026-10-23.txt"
+$names = @(Select-String -Path $raceLog -Pattern '^\s*--- FAIL: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
+$leaves = @($names | Where-Object { $testName = $_; -not ($names | Where-Object { $_.StartsWith($testName + '/') }) })
+$newFailures = @($leaves | Where-Object { $_ -notin $baseline })
+"Baseline failing leaf tests: $($baseline.Count)"
+"Observed failing leaf tests: $($leaves.Count)"
+"New failing leaf tests: $($newFailures.Count)"
+"Data race reports: $(@(Select-String -Path $raceLog -Pattern 'WARNING: DATA RACE').Count)"
+$newFailures
+if ($newFailures.Count -eq 0) { 'Baseline comparison: PASS' } else { 'Baseline comparison: FAIL' }
+
+```
+
+Actual comparison output:
+
+```text
+Baseline failing leaf tests: 14
+Observed failing leaf tests: 25
+New failing leaf tests: 11
+Data race reports: 0
+TestBashNearDuplicateAsks
+TestHookModifiedTwelveMBNearDuplicate/defaults_ask
+TestHookModifiedTwelveMBNearDuplicate/flag_reenables
+TestHookModifiedTwelveMBNearDuplicate/high_risk_denies_with_advisory
+TestNearDupAnalysisRiskAndGrowth/high_stays_high
+TestNearDupAnalysisRiskAndGrowth/low_becomes_medium
+TestNearDupAnalysisRiskAndGrowth/medium_stays_medium
+TestNearDupReadOnlyIntegration/candidate_read_exceeds_shared_budget
+TestNearDupReadOnlyIntegration/five_percent_edit_plus_insertion
+TestNearDupReadOnlyIntegration/unrelated_random_file
+TestWriteNearDuplicateUsesPayload/low_to_medium_asks
+Baseline comparison: FAIL
+
+```
+
+**Result: baseline comparison failed.** There are 11 failing leaf tests absent from the baseline. The failures show time-budget exhaustion, absent hook decisions, or absent near-duplicate advisory text. No data race was reported. The current evidence cannot support a claim of no new test failures, even though the older acceptance run above did. This update changes verification documentation only; the implementation and existing tests are preserved. Live Claude Code session testing remains unperformed.
+
+## v0.3.0 repeated race verification — 2026-10-24
+
+**Not tested in a live Claude Code session.** These are automated Go race tests only; installed-plugin behavior has not been exercised interactively.
+
+Three runs were executed sequentially, with no source edits between runs, on feat/near-duplicate-detection based on commit 430cd25d6e4851e5c7cc61925f2c54337e3c86cc, including the uncommitted per-check time-budget and fixture-isolation changes. Production defaults remain five seconds; the large-file tests explicitly use sixty seconds. SHA-256 checks of the changed Go files before each run confirmed that the tested source stayed unchanged. The previous verification sections are historical results, not the result of these three runs.
+
+The unchanged pre-change baseline was read from the external file C:/Users/FC/.codex/visualizations/2026/10/20/01a15872-8472-7163-93c9-935b36159a26/baseline-2026-10-23/baseline-failures.txt. Parent failures are excluded when failed subtests already represent them. Go suite exit codes are reported separately from comparison against that baseline; a baseline match is not a clean full-suite pass.
+
+Displayed output normalizes line endings and trailing spaces for Markdown; the original captured stdout/stderr logs remain unchanged outside Git.
+
+Environment: go version go1.27.0 windows/amd64; git version 2.44.0.windows.1. Commands ran from the repository root in PowerShell.
+
+### Run 1
+
+Started: 2026-10-24T12:07:59.1858628+06:00. Finished: 2026-10-24T12:10:13.4304476+06:00. Wall time: 134.24 seconds.
+
+Exact command:
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+Real combined stdout/stderr (exit 1):
+
+~~~text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (0.94s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (0.92s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (9.90s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.58s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (0.88s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (0.86s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	117.013s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	123.718s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.04s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.01s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	1.977s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	12.169s
+FAIL
+~~~
+
+Failing leaf test names recorded for this run:
+
+~~~text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+~~~
+
+Comparison: baseline names=14; observed failing leaves=14; new failures=0; baseline failures absent=0; data-race reports=0; timeout/panic reports=0.
+### Run 2
+
+Started: 2026-10-24T12:10:13.7159986+06:00. Finished: 2026-10-24T12:11:34.7785945+06:00. Wall time: 81.06 seconds.
+
+Exact command:
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+Real combined stdout/stderr (exit 1):
+
+~~~text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (0.45s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (0.43s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (7.40s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.51s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (1.27s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (1.20s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	61.770s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	71.815s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.02s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	1.590s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	8.391s
+FAIL
+~~~
+
+Failing leaf test names recorded for this run:
+
+~~~text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+~~~
+
+Comparison: baseline names=14; observed failing leaves=14; new failures=0; baseline failures absent=0; data-race reports=0; timeout/panic reports=0.
+### Run 3
+
+Started: 2026-10-24T12:11:34.9065446+06:00. Finished: 2026-10-24T12:13:03.4342196+06:00. Wall time: 88.53 seconds.
+
+Exact command:
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+Real combined stdout/stderr (exit 1):
+
+~~~text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (0.48s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (0.51s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (9.97s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (1.09s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (1.37s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (1.23s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	72.567s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	80.828s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.03s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	1.507s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	8.918s
+FAIL
+~~~
+
+Failing leaf test names recorded for this run:
+
+~~~text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+~~~
+
+Comparison: baseline names=14; observed failing leaves=14; new failures=0; baseline failures absent=0; data-race reports=0; timeout/panic reports=0.
+
+### Three-run comparison
+
+| Run | Go exit | Failing leaves | New vs baseline | Baseline names absent | Data races | Timeouts/panics |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 14 | 0 | 0 | 0 | 0 |
+| 2 | 1 | 14 | 0 | 0 | 0 | 0 |
+| 3 | 1 | 14 | 0 | 0 | 0 | 0 |
+
+**Result:** All three runs exited 1 with exactly the same 14 known baseline failing leaf tests and no new failures, data-race reports, or timeout/panic reports. This is a match to the baseline, not a clean full-suite pass.
+
+Full logs, per-run failure-name files, the orchestration script, and results.json remain outside Git in C:\Users\FC\.codex\visualizations\2026\10\20\01a15872-8472-7163-93c9-935b36159a26\triple-race-budget-2026-10-24. The baseline file was not modified or committed. **Live Claude Code session testing has not been performed.**

@@ -33,6 +33,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Flags for both:")
 	fmt.Fprintln(w, "  --warning-mb <int>    Warning threshold in MB (default 50, or $GITSIZE_WARNING_MB)")
 	fmt.Fprintln(w, "  --failure-mb <int>    Failure threshold in MB (default 100, or $GITSIZE_FAILURE_MB)")
+	fmt.Fprintln(w, "  --near-dup=<bool>     Detect near duplicates (default true, or $GITSIZE_NEARDUP=0/1)")
+	fmt.Fprintln(w, "  --near-dup-threshold <float>  Similarity from 0.5 to 1.0 (default 0.90, or $GITSIZE_NEARDUP_THRESHOLD)")
+	fmt.Fprintln(w, "  --near-dup-min-mb <int>       Positive minimum MB (default 5, or $GITSIZE_NEARDUP_MIN_MB)")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "'analyze' exits 0 for low or medium risk, 1 for high risk, 2 on error.")
 	fmt.Fprintln(w, "'hook' always exits 0 and prints a permission decision only when it has one.")
@@ -73,6 +76,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	staged := fs.Bool("staged", false, "Analyze the changes already staged in the index")
 	pending := fs.Bool("pending", false, "Analyze everything `git add -A && git commit` would record")
 	warningMB, failureMB := thresholdFlags(fs)
+	nearDup := nearDupFlags(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -88,6 +92,8 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	}
 
 	thresholds, err := resolveThresholds(fs, *warningMB, *failureMB)
+	cfg, nearDupErr := resolveNearDup(fs, nearDup)
+	err = errors.Join(err, nearDupErr)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -117,7 +123,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		sels = append(sels, analyzer.Selection{Dir: root, Kind: analyzer.KindPending})
 	}
 
-	report, err := analyzer.Analyze(sels, thresholds)
+	report, err := analyzer.AnalyzeWithNearDup(sels, thresholds, cfg)
 	if err != nil {
 		fmt.Fprintf(stderr, "analysis error: %v\n", err)
 		return 2

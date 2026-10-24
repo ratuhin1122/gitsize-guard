@@ -19,7 +19,7 @@ gitsize-guard adds that missing awareness directly into Claude Code's tool-execu
 - **Denies** the command when the exact total reaches the failure threshold (default 100 MB), with the largest files and a recommendation (e.g. `git lfs track "*.bin"`) fed back to Claude Code.
 - **Denies** a command that creates or changes files (or the index) and then stages or commits in the same line (e.g. `dd ... && git add model.bin && git commit`, or `git stash pop && git commit`), since that content can't be measured before the command runs. Claude is told to run the git step as its own command, which is then checked exactly. Commands that can't change anything, like `git checkout -b`, `go test` or checksums, don't count.
 - **Asks you** to confirm at the warning threshold (default 50 MB), and when it can only estimate what a command stages (variables in paths, `xargs git add`), or can't tell which repository it targets.
-- Also checks `Write` tool calls whose content alone would cross a threshold (unless the target is gitignored).
+- Also checks large `Write` tool payloads for size impact and near-duplicates (unless the target is gitignored).
 - **Doesn't modify your repository**: no objects are written, no index refresh, and no network access.
 
 ---
@@ -95,6 +95,36 @@ Set these in the environment Claude Code runs in (commands Claude runs cannot ch
 
 Setting only one threshold moves the other to meet it: `GITSIZE_FAILURE_MB=40` on its own also lowers the warning to 40 MB. An invalid value is replaced by its default (valid settings are kept) and reported on the next git staging command, rather than silently ignored.
 
+## Near-duplicate detection
+
+gitsize-guard warns when a large file shares most of its content with another path already in `HEAD`. It uses deterministic content-defined chunks to recognize modified copies, including copies with inserted bytes. Similarity is the fraction of the new file's bytes covered by matching chunks, respecting repeated-chunk counts. It checks working-tree files, staged blobs, and the content supplied by `Write` tool calls.
+
+Detection is enabled by default for files of at least **5 MiB**, with a **0.90** similarity threshold. It compares up to five HEAD candidates between half and twice the new file's size, ordered by size proximity and then path, and skips Git LFS pointer files. Checks share a **512 MiB** read allowance and a **5-second** deadline; skipped candidates are reported in `notes`.
+
+| CLI flag | Environment variable | Default | Accepted values |
+| --- | --- | --- | --- |
+| `--near-dup=<bool>` | `GITSIZE_NEARDUP` | `true` / `1` | Flag: `true` or `false`; environment: `0` or `1` |
+| `--near-dup-threshold <float>` | `GITSIZE_NEARDUP_THRESHOLD` | `0.90` | `0.5` through `1.0`, inclusive |
+| `--near-dup-min-mb <int>` | `GITSIZE_NEARDUP_MIN_MB` | `5` | Positive whole MiB, at most `1048576` |
+
+Flags override their corresponding environment settings independently and work with both `gitsize analyze` and `gitsize hook`. For example:
+
+```bash
+gitsize analyze --pending --near-dup-threshold 0.95 --near-dup-min-mb 12
+gitsize analyze --pending --near-dup=false
+```
+
+Invalid settings cause `analyze` to exit with an error. The hook retains valid settings, substitutes defaults for invalid ones, and surfaces the configuration error through an `ask` on staging or Write calls; an existing `deny` remains a `deny`.
+
+A match adds `near_duplicate` metadata to the per-file JSON result, a report-level `near_duplicates` count, and a reason such as "copy.bin is ~94% identical to original.bin already in HEAD". Low risk becomes medium so the hook asks for confirmation; medium and high risk retain their level. The reason recommends replacing the existing file rather than adding a copy, or tracking versions with Git LFS or external storage. Updating the same HEAD path does not count as adding a duplicate.
+
+### Limitations
+
+- Compares against **HEAD only**, not other staged files or older history.
+- Already-compressed formats such as ZIP, MP4, and some model formats may share few chunks even when their contents are semantically similar.
+- **Advisory only**: similarity never reduces `growth_bytes`, never lowers risk, and never raises risk to high. Existing size-based denials remain in effect.
+- Does not replace Git's own pack delta compression. Chunk similarity is a content-overlap advisory, not a prediction of packed repository size.
+
 ## How decisions are made
 
 | Situation | Hook output |
@@ -103,6 +133,7 @@ Setting only one threshold moves the other to meet it: `GITSIZE_FAILURE_MB=40` o
 | Files or the index are changed, then staged or committed, in the same command | `deny`, telling Claude to run the git step separately |
 | Estimated growth (the command's file set couldn't be determined) ≥ a threshold | `ask`: you're asked to confirm, with the reason |
 | Exact growth ≥ warning threshold | `ask` |
+| A near-duplicate of another HEAD path is found while size risk is low | `ask` (advisory; measured growth is unchanged) |
 | A git staging command whose repository it can't determine, or a `git` error | `ask` (such notes are also appended to any other decision) |
 | No `gitsize` binary available | `ask` on git staging commands, saying the guard is inactive |
 | Anything else | no output: Claude Code's normal permission flow applies |
@@ -120,6 +151,8 @@ Claude Code starts the hook directly with its configured Bash shell. On Windows,
 
 ## Limitations
 
+- The hook can **fail open** (empty output, exit `0`). If the binary crashes or times out, the shim emits no decision. If a near-duplicate check reaches its five-second budget while measured size risk remains low, the advisory is skipped and the hook can also emit no decision; the skip note remains in the CLI report. Existing size-based warning and denial thresholds still apply when their measurements complete.
+- A missing or inaccessible working directory can also produce no hook decision: repository lookup errors are currently treated as selections outside a Git work tree. The earlier intermittent empty decisions were not conclusively traced to machine load, and this behavior remains unchanged.
 - Command analysis is static and best-effort. When a command stages files it can't pin down, it estimates from everything pending in the repository and asks rather than skipping the check.
 - Commands that commit through something opaque aren't seen: a script file (`bash release.sh`), `make`, or an `npm run` script that runs git internally. Such commands are assumed to change files but not the index, so `npm run build && git commit -m x` isn't blocked.
 - `git merge`, `git cherry-pick`, `git am` and `git revert` create commits without a separate `git commit`, so they aren't checked, and neither is `git commit-tree`. Content they (or `git apply --cached`, `git stash pop`, `git update-index`) put in the index is checked by a later `git commit`, which is denied if it's in the same command line.
