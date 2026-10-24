@@ -291,7 +291,8 @@ Per-file `generated` metadata contains `category`, `confidence` (`strong` or `we
 - Bash detection uses **static, best-effort parsing**. Ambiguous selections are estimated from pending files and prompt for confirmation.
 - Duplicate detection compares against **HEAD only**, not other staged files or older history.
 - Already-compressed ZIP, MP4, and some model formats may share few chunks despite semantic similarity. Chunk overlap does not replace Git's pack delta compression.
-- The hook **can fail open**: a crash or timeout can produce empty output with exit `0`. A skipped near-duplicate or generated-file advisory can also leave no decision when measured size risk is low; completed size checks still apply.
+- The hook **can fail open (empty stdout, exit `0`)**. The [shell shim](hooks/pretooluse-gitsize.sh) prints only successful, nonempty binary output and then exits `0`; a failed or timed-out binary can therefore leave no permission decision. Invalid hook JSON also produces no decision: the [Go runner](cmd/gitsize/hook.go) logs the decode error to stderr and returns `0`.
+- If a near-duplicate or generated-file deadline expires while measured size risk is low, the skip note stays in the CLI report and does not itself trigger an `ask`. The [tiny-budget regression test](cmd/gitsize/generated_budget_test.go) reproduces exit `0` with both stdout and stderr empty. **A budget skip does not override a completed size-based warning or denial.** This reproduction does not establish why the earlier oversized-file check returned no decision; that cause remains unresolved.
 - Windows test-suite gaps are tracked in [issue #2](https://github.com/ratuhin1122/gitsize-guard/issues/2). See [VERIFICATION.md](VERIFICATION.md) for recorded checks.
 - **Not yet tested in a live Claude Code session.** The demo remains a placeholder.
 
