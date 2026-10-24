@@ -20,6 +20,9 @@ import (
 // GeneratedConfig controls generated-file advisories independently of similarity.
 type GeneratedConfig struct {
 	Enabled    bool
+	StrictWeak bool
+	// A nil Allow loads .gitsizeallow; a non-nil list overrides it.
+	Allow      []string
 	TimeBudget time.Duration
 	MaxPaths   int
 }
@@ -191,7 +194,7 @@ func generatedSuppressed(folder string, prefixes map[string]bool) bool {
 	return false
 }
 
-func (c *generatedCheck) annotateGenerated(file *FileImpact, head []byte, prefixes, ignored map[string]bool) {
+func (c *generatedCheck) annotateGenerated(file *FileImpact, head []byte, prefixes, ignored map[string]bool, strictWeak bool) {
 	match, ok := generated.Classify(file.FilePath)
 	if ok && generatedSuppressed(generatedFolder(file.FilePath, match.Rule), prefixes) {
 		return
@@ -213,6 +216,7 @@ func (c *generatedCheck) annotateGenerated(file *FileImpact, head []byte, prefix
 		confidence = "strong"
 	}
 	file.Generated = &Generated{Category: match.Category, Confidence: confidence, Rule: match.Rule, IgnoredByGitignore: isIgnored}
+	file.Generated.strictWeak = strictWeak
 }
 
 func (c *generatedCheck) blobHead(repo, oid string) ([]byte, error) {
@@ -244,22 +248,43 @@ func (c *generatedCheck) blobHead(repo, oid string) ([]byte, error) {
 	return head, nil
 }
 
-func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig) []string {
+func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig, check *generatedCheck) []string {
 	if !cfg.Enabled || len(files) == 0 {
 		return nil
 	}
-	check, cancel := newGeneratedCheck(cfg.TimeBudget, cfg.MaxPaths)
-	defer cancel()
+	noteStart := len(check.notes)
+	original := files
+	selected := make([]FileImpact, 0, len(files))
+	indices := make([]int, 0, len(files))
+	for i, file := range files {
+		if check.skipped() {
+			return check.notes[noteStart:]
+		}
+		if !cfg.allows(file.FilePath) {
+			selected = append(selected, file)
+			indices = append(indices, i)
+		}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	defer func() {
+		for i, file := range selected {
+			original[indices[i]].Generated = file.Generated
+		}
+	}()
+	files = selected
 	if r.headTree != nil {
 		check.head[r.root] = r.headTree
 	}
+	headNoteStart := len(check.notes)
 	prefixes, err := check.trackedPrefixes(r.root)
 	if err != nil {
 		return []string{fmt.Sprintf("Generated-file check skipped: %v", err)}
 	}
 	// Incomplete HEAD knowledge must not flag intentionally tracked folders.
-	if len(check.notes) > 0 {
-		return check.notes
+	if len(check.notes) > headNoteStart {
+		return check.notes[noteStart:]
 	}
 	if len(files) > check.maxPaths {
 		check.capNote()
@@ -272,7 +297,7 @@ func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig) []str
 	ignored, err := check.ignoredByGitignore(r.root, paths)
 	if err != nil {
 		check.notes = append(check.notes, fmt.Sprintf("Generated-file ignore check skipped: %v", err))
-		return check.notes
+		return check.notes[noteStart:]
 	}
 	for i := range files {
 		if check.skipped() {
@@ -284,7 +309,7 @@ func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig) []str
 			continue
 		}
 		if match, ok := generated.Classify(file.FilePath); ok && (match.Confidence == generated.Strong || generatedSuppressed(generatedFolder(file.FilePath, match.Rule), prefixes)) {
-			check.annotateGenerated(file, nil, prefixes, ignored)
+			check.annotateGenerated(file, nil, prefixes, ignored, cfg.StrictWeak)
 			continue
 		}
 		var head []byte
@@ -308,15 +333,85 @@ func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig) []str
 		if err != nil {
 			check.notes = append(check.notes, fmt.Sprintf("Generated-file header skipped for %q: %v", file.FilePath, err))
 		}
-		check.annotateGenerated(file, head, prefixes, ignored)
+		check.annotateGenerated(file, head, prefixes, ignored, cfg.StrictWeak)
 	}
-	return check.notes
+	return check.notes[noteStart:]
+}
+
+// generatedStagedFiles retains advisories for selected index content that an add
+// would leave unchanged. These entries have zero incremental growth, preserving
+// the existing size measurement. Git pathspec filtering keeps unrelated staged
+// paths outside the command's scope out of the advisory report.
+func (r *repoScan) generatedStagedFiles(files []FileImpact, cfg GeneratedConfig, check *generatedCheck) ([]FileImpact, []string) {
+	if !cfg.Enabled || len(r.generatedSelections) == 0 {
+		return files, nil
+	}
+	seen := map[string]bool{}
+	for _, file := range files {
+		seen[file.FilePath] = true
+	}
+	var extra []stagedBlob
+	for _, selection := range r.generatedSelections {
+		if len(selection.Pathspecs) == 0 {
+			continue
+		}
+		blobs, err := stagedBlobsMatching(check.ctx, selection.Dir, selection.Pathspecs)
+		if err != nil {
+			if check.skipped() {
+				return files, check.notes
+			}
+			return files, []string{fmt.Sprintf("Generated-file staged check skipped: %v", err)}
+		}
+		for _, blob := range blobs {
+			if seen[blob.path] || cfg.allows(blob.path) {
+				continue
+			}
+			if cand := r.cands[blob.path]; cand != nil && cand.blob == "" {
+				continue // a selected worktree deletion/replacement supersedes the index
+			}
+			if len(extra) == check.maxPaths {
+				check.capNote()
+				break
+			}
+			seen[blob.path] = true
+			extra = append(extra, blob)
+		}
+	}
+	ids := make([]string, len(extra))
+	for i := range extra {
+		ids[i] = extra[i].blob
+	}
+	sizes, err := objectSizesContext(check.ctx, r.root, nil, ids)
+	if err != nil {
+		if check.skipped() {
+			return files, check.notes
+		}
+		return files, []string{fmt.Sprintf("Generated-file staged sizes skipped: %v", err)}
+	}
+	for _, blob := range extra {
+		size, ok := sizes[blob.blob]
+		if !ok {
+			check.notes = append(check.notes, fmt.Sprintf("Generated-file staged header skipped for %q: blob unavailable locally.", blob.path))
+			continue
+		}
+		files = append(files, FileImpact{FilePath: blob.path, SizeBytes: size, ChangeType: ChangeStaged, generatedOnly: true})
+		r.cands[blob.path] = &candidate{rel: blob.path, blob: blob.blob, change: ChangeStaged}
+	}
+	return files, check.notes
 }
 
 // CheckGenerated annotates Write content supplied in memory. It never changes
 // measured bytes; NewReport applies advisory policy and aggregation.
 func CheckGenerated(repo string, file *FileImpact, head []byte, cfg GeneratedConfig) []string {
 	if !cfg.Enabled {
+		return nil
+	}
+	var err error
+	cfg, err = ResolveGeneratedConfig(repo, cfg)
+	if err != nil {
+		return []string{fmt.Sprintf("Generated-file configuration error: %v", err)}
+	}
+	if cfg.allows(file.FilePath) {
 		return nil
 	}
 	check, cancel := newGeneratedCheck(cfg.TimeBudget, cfg.MaxPaths)
@@ -335,7 +430,7 @@ func CheckGenerated(repo string, file *FileImpact, head []byte, cfg GeneratedCon
 	if check.skipped() {
 		return check.notes
 	}
-	check.annotateGenerated(file, head[:min(len(head), 2048)], prefixes, ignored)
+	check.annotateGenerated(file, head[:min(len(head), 2048)], prefixes, ignored, cfg.StrictWeak)
 	return check.notes
 }
 
@@ -356,7 +451,11 @@ func applyGeneratedReport(report *Report, files []FileImpact) {
 		}
 		report.GeneratedFiles++
 		report.GeneratedByCategory[g.Category]++
-		key := g.Confidence + ":" + g.Category
+		confidence := g.Confidence
+		if g.strictWeak {
+			confidence = "strong"
+		}
+		key := confidence + ":" + g.Category
 		if groups[key] == nil {
 			groups[key] = &group{folders: map[string]bool{}}
 		}

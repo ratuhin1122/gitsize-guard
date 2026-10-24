@@ -95,7 +95,23 @@ func AnalyzeWithConfig(sels []Selection, t Thresholds, cfg NearDupConfig, genera
 			errs = append(errs, err) // files is still the best available measurement
 		}
 		notes = append(notes, scans[root].nearDuplicates(files, cfg)...)
-		notes = append(notes, scans[root].generatedFiles(files, generatedCfg)...)
+		repoGeneratedCfg, cfgErr := ResolveGeneratedConfig(root, generatedCfg)
+		if cfgErr != nil {
+			errs = append(errs, fmt.Errorf("generated-file configuration error: %w", cfgErr))
+		}
+		generatedCheck, cancelGenerated := newGeneratedCheck(repoGeneratedCfg.TimeBudget, repoGeneratedCfg.MaxPaths)
+		var stagedNotes []string
+		files, stagedNotes = scans[root].generatedStagedFiles(files, repoGeneratedCfg, generatedCheck)
+		notes = append(notes, stagedNotes...)
+		notes = append(notes, scans[root].generatedFiles(files, repoGeneratedCfg, generatedCheck)...)
+		cancelGenerated()
+		visible := files[:0]
+		for _, file := range files {
+			if !file.generatedOnly || file.Generated != nil {
+				visible = append(visible, file)
+			}
+		}
+		files = visible
 		if len(roots) > 1 { // say which repository each file is in
 			for i := range files {
 				files[i].FilePath = filepath.ToSlash(filepath.Join(root, filepath.FromSlash(files[i].FilePath)))
@@ -130,11 +146,12 @@ type candidate struct {
 
 // repoScan collects the candidate files for one repository.
 type repoScan struct {
-	root      string
-	cands     map[string]*candidate
-	order     []string
-	noFilters []string // -c options that disable configured filters; nil until needed
-	headTree  []byte   // shared with generated-file checks once exact deduplication reads HEAD
+	root                string
+	cands               map[string]*candidate
+	order               []string
+	noFilters           []string // -c options that disable configured filters; nil until needed
+	headTree            []byte   // shared with generated-file checks once exact deduplication reads HEAD
+	generatedSelections []Selection
 }
 
 // put records c. Working-tree content supersedes a staged blob for the same
@@ -151,6 +168,9 @@ func (r *repoScan) put(c *candidate) {
 }
 
 func (r *repoScan) add(s Selection) error {
+	if s.Kind == KindPaths {
+		r.generatedSelections = append(r.generatedSelections, s)
+	}
 	switch s.Kind {
 	case KindStaged:
 		return r.addStaged()

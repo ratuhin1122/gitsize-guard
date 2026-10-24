@@ -21,6 +21,7 @@ const (
 
 // FileImpact represents the size impact of a single file.
 type FileImpact struct {
+	generatedOnly bool           // supplemental staged entry; retained only if annotated
 	FilePath      string         `json:"file_path"`    // relative to the repository root
 	SizeBytes     int64          `json:"size_bytes"`   // size in the working tree (or of the staged blob)
 	GrowthBytes   int64          `json:"growth_bytes"` // bytes git would newly store; 0 if the content is already in HEAD
@@ -32,6 +33,7 @@ type FileImpact struct {
 
 // Generated describes advisory evidence that a file is generated content.
 type Generated struct {
+	strictWeak         bool
 	Category           string `json:"category"`
 	Confidence         string `json:"confidence"`
 	Rule               string `json:"rule"`
