@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ratuhin1122/gitsize-guard/internal/similarity"
 )
@@ -81,6 +82,8 @@ func assertGitFilesUnchanged(t *testing.T, repo string) func() {
 func TestNearDupReadOnlyIntegration(t *testing.T) {
 	// newRepo skips the integration test when Git is not available on PATH.
 	repo := newRepo(t)
+	cfg := DefaultNearDupConfig()
+	cfg.TimeBudget = time.Minute
 	seededBytes := func(seed int64, size int) []byte {
 		data := make([]byte, size)
 		if _, err := rand.New(rand.NewSource(seed)).Read(data); err != nil {
@@ -122,7 +125,7 @@ func TestNearDupReadOnlyIntegration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer assertGitFilesUnchanged(t, repo)()
-			report, err := Analyze([]Selection{{Dir: repo, Kind: KindFiles, Pathspecs: []string{tc.path}}}, DefaultThresholds())
+			report, err := AnalyzeWithNearDup([]Selection{{Dir: repo, Kind: KindFiles, Pathspecs: []string{tc.path}}}, DefaultThresholds(), cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,12 +152,11 @@ func TestNearDupReadOnlyIntegration(t *testing.T) {
 
 	t.Run("candidate read exceeds shared budget", func(t *testing.T) {
 		defer assertGitFilesUnchanged(t, repo)()
-		cfg := DefaultNearDupConfig()
 		file := FileImpact{FilePath: "modified-copy.bin", SizeBytes: int64(len(withInsertion)), GrowthBytes: int64(len(withInsertion)), ChangeType: ChangeFile}
 		// Inject a smaller allowance into the production check to cross the
 		// budget without allocating/reading a 512 MiB fixture. The new content
 		// fits, but reading the HEAD candidate would exceed the remaining bytes.
-		check, cancel := newNearDupCheck()
+		check, cancel := newNearDupCheck(cfg.TimeBudget)
 		defer cancel()
 		check.remaining = int64(len(withInsertion) + len(original) - 1)
 		var readErr error

@@ -8,17 +8,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ratuhin1122/gitsize-guard/internal/similarity"
 )
 
-func TestNearDupAnalysisRiskAndGrowth(t *testing.T) {
+func nearDupRiskFixture(t *testing.T) (string, []byte) {
+	t.Helper()
 	repo := newRepo(t)
-	// Policy branches use a small eligible fixture so race instrumentation and
-	// concurrent package tests do not consume the advisory deadline. The separate
-	// 12 MiB integration test exercises the production minimum and 5% edits.
-	cfg := DefaultNearDupConfig()
-	cfg.MinBytes = mib
+	// Registered after TempDir's cleanup, so this runs while the fixture is
+	// still owned by this subtest, before Go is supposed to remove it.
+	t.Cleanup(func() {
+		if _, err := os.Stat(repo); err != nil {
+			t.Errorf("risk fixture disappeared before its owning subtest completed: %v", err)
+		}
+	})
 	data := make([]byte, 2*mib)
 	if _, err := rand.New(rand.NewSource(2026)).Read(data); err != nil {
 		t.Fatal(err)
@@ -48,7 +52,13 @@ func TestNearDupAnalysisRiskAndGrowth(t *testing.T) {
 		t.Fatal("deterministic fixture has no chunk below 10% of its size")
 	}
 	writeFile(t, filepath.Join(repo, "copy.bin"), modified)
-	sel := []Selection{{Dir: repo, Kind: KindFiles, Pathspecs: []string{"copy.bin"}}}
+	return repo, modified
+}
+
+func TestNearDupAnalysisRiskAndGrowth(t *testing.T) {
+	cfg := DefaultNearDupConfig()
+	cfg.MinBytes = mib
+	cfg.TimeBudget = time.Minute
 	for _, tc := range []struct {
 		name       string
 		thresholds Thresholds
@@ -59,6 +69,10 @@ func TestNearDupAnalysisRiskAndGrowth(t *testing.T) {
 		{"high stays high", Thresholds{mib, 2 * mib}, RiskHigh},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// Each case owns its TempDir; no case depends on a sibling's fixture
+			// or on the later staged-content mutation.
+			repo, modified := nearDupRiskFixture(t)
+			sel := []Selection{{Dir: repo, Kind: KindFiles, Pathspecs: []string{"copy.bin"}}}
 			disabled := cfg
 			disabled.Enabled = false
 			baseline, err := AnalyzeWithNearDup(sel, tc.thresholds, disabled)
@@ -77,7 +91,7 @@ func TestNearDupAnalysisRiskAndGrowth(t *testing.T) {
 				t.Fatal("advisory changed exact size or growth")
 			}
 			dup := got.Files[0].NearDuplicate
-			if dup == nil || dup.Path != "existing.bin" || dup.Similarity < .9 || dup.CandidateSize != int64(len(data)) || dup.SharedBytes <= 0 {
+			if dup == nil || dup.Path != "existing.bin" || dup.Similarity < .9 || dup.CandidateSize != int64(len(modified)) || dup.SharedBytes <= 0 {
 				t.Fatalf("near duplicate = %+v", dup)
 			}
 			if !strings.Contains(strings.Join(got.Reasons, " "), "already in HEAD") || !strings.Contains(got.Recommendation, "Replace the existing file") {
@@ -106,13 +120,16 @@ func TestNearDupAnalysisRiskAndGrowth(t *testing.T) {
 			}
 		})
 	}
-	// Staged content, rather than a subsequent working-tree edit, is analyzed.
-	git(t, repo, "add", "copy.bin")
-	writeFile(t, filepath.Join(repo, "copy.bin"), []byte("different unstaged content"))
-	staged, err := AnalyzeWithNearDup([]Selection{{Dir: repo, Kind: KindStaged}}, DefaultThresholds(), cfg)
-	if err != nil || staged.NearDuplicates != 1 || staged.GrowthBytes != int64(len(modified)) {
-		t.Fatalf("staged: %+v, %v", staged, err)
-	}
+	t.Run("staged content", func(t *testing.T) {
+		// Staged content, rather than a subsequent working-tree edit, is analyzed.
+		repo, modified := nearDupRiskFixture(t)
+		git(t, repo, "add", "copy.bin")
+		writeFile(t, filepath.Join(repo, "copy.bin"), []byte("different unstaged content"))
+		staged, err := AnalyzeWithNearDup([]Selection{{Dir: repo, Kind: KindStaged}}, DefaultThresholds(), cfg)
+		if err != nil || staged.NearDuplicates != 1 || staged.GrowthBytes != int64(len(modified)) {
+			t.Fatalf("staged: %+v, %v", staged, err)
+		}
+	})
 }
 
 func TestNearDupAnalysisNoHEADAndMinimum(t *testing.T) {

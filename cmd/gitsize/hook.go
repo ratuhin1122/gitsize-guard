@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ratuhin1122/gitsize-guard/internal/analyzer"
 	"github.com/ratuhin1122/gitsize-guard/internal/hookio"
@@ -22,6 +23,12 @@ const maxListed = 5
 // broken guard must not block unrelated work. It prints a "deny" or "ask"
 // decision (see evaluate), or nothing.
 func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runHookWithTimeBudget(args, stdin, stdout, stderr, 0)
+}
+
+// runHookWithTimeBudget allows callers to override only the advisory deadline;
+// flags, environment validation and permission decisions use the normal path.
+func runHookWithTimeBudget(args []string, stdin io.Reader, stdout, stderr io.Writer, budget time.Duration) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	warningMB, failureMB := thresholdFlags(fs)
@@ -32,6 +39,7 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	thresholds, configErr := resolveThresholds(fs, *warningMB, *failureMB)
 	cfg, nearDupErr := resolveNearDup(fs, nearDup)
+	cfg.TimeBudget = budget
 	configErr = errors.Join(parseErr, configErr, nearDupErr)
 	if configErr != nil {
 		fmt.Fprintf(stderr, "gitsize-guard: %v\n", configErr)

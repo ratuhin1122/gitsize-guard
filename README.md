@@ -151,6 +151,8 @@ Claude Code starts the hook directly with its configured Bash shell. On Windows,
 
 ## Limitations
 
+- The hook can **fail open** (empty output, exit `0`). If the binary crashes or times out, the shim emits no decision. If a near-duplicate check reaches its five-second budget while measured size risk remains low, the advisory is skipped and the hook can also emit no decision; the skip note remains in the CLI report. Existing size-based warning and denial thresholds still apply when their measurements complete.
+- A missing or inaccessible working directory can also produce no hook decision: repository lookup errors are currently treated as selections outside a Git work tree. The earlier intermittent empty decisions were not conclusively traced to machine load, and this behavior remains unchanged.
 - Command analysis is static and best-effort. When a command stages files it can't pin down, it estimates from everything pending in the repository and asks rather than skipping the check.
 - Commands that commit through something opaque aren't seen: a script file (`bash release.sh`), `make`, or an `npm run` script that runs git internally. Such commands are assumed to change files but not the index, so `npm run build && git commit -m x` isn't blocked.
 - `git merge`, `git cherry-pick`, `git am` and `git revert` create commits without a separate `git commit`, so they aren't checked, and neither is `git commit-tree`. Content they (or `git apply --cached`, `git stash pop`, `git update-index`) put in the index is checked by a later `git commit`, which is denied if it's in the same command line.

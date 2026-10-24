@@ -49,8 +49,53 @@ func TestNearDupStreamDeadlineInterruptsRead(t *testing.T) {
 }
 
 func TestNearDupDefaults(t *testing.T) {
-	if got := DefaultNearDupConfig(); got != (NearDupConfig{true, 0.90, 5 << 20}) {
+	if got := DefaultNearDupConfig(); got != (NearDupConfig{Enabled: true, Threshold: 0.90, MinBytes: 5 << 20}) {
 		t.Fatalf("defaults = %+v", got)
+	}
+}
+
+func TestNearDupTimeBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		want   time.Duration
+	}{
+		{"default", DefaultNearDupConfig().TimeBudget, 5 * time.Second},
+		{"negative uses default", -time.Second, 5 * time.Second},
+		{"override", time.Minute, time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := time.Now()
+			check, cancel := newNearDupCheck(tc.budget)
+			defer cancel()
+			after := time.Now()
+			deadline, ok := check.ctx.Deadline()
+			if !ok || deadline.Before(before.Add(tc.want)) || deadline.After(after.Add(tc.want)) {
+				t.Fatalf("deadline=%s, want %s after check creation", deadline, tc.want)
+			}
+		})
+	}
+}
+
+func TestNearDupTinyTimeBudgetSkipsWithNote(t *testing.T) {
+	repo := newRepo(t)
+	data := bytes.Repeat([]byte{'x'}, 64<<10)
+	writeFile(t, filepath.Join(repo, "original.bin"), data)
+	git(t, repo, "add", "original.bin")
+	git(t, repo, "commit", "-qm", "original")
+	writeFile(t, filepath.Join(repo, "copy.bin"), data)
+	cfg := DefaultNearDupConfig()
+	cfg.MinBytes = 1
+	cfg.TimeBudget = time.Nanosecond
+	report, err := AnalyzeWithNearDup([]Selection{{Dir: repo, Kind: KindFiles, Pathspecs: []string{"copy.bin"}}}, DefaultThresholds(), cfg)
+	if err != nil {
+		t.Fatalf("deadline must be advisory, not an analysis error: %v", err)
+	}
+	if len(report.Notes) != 1 || !strings.Contains(report.Notes[0], "time budget reached") {
+		t.Fatalf("missing time-budget skip note: %v", report.Notes)
+	}
+	if len(report.Files) != 1 || report.NearDuplicates != 0 || report.Files[0].NearDuplicate != nil || report.GrowthBytes != int64(len(data)) || report.Files[0].GrowthBytes != int64(len(data)) || report.Files[0].SizeBytes != int64(len(data)) || report.RiskLevel != RiskLow {
+		t.Fatalf("time-budget skip changed size, growth, or risk: %+v", report)
 	}
 }
 
@@ -189,7 +234,7 @@ func TestNearDupBudgetsAndMissingBlob(t *testing.T) {
 }
 
 func TestNearDupGitEnvironment(t *testing.T) {
-	check, cancel := newNearDupCheck()
+	check, cancel := newNearDupCheck(0)
 	defer cancel()
 	cmd := check.command(t.TempDir(), "ls-tree", "HEAD")
 	for _, want := range gitEnv {

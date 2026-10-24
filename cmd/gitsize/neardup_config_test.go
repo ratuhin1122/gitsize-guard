@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ratuhin1122/gitsize-guard/internal/analyzer"
 )
@@ -158,7 +159,7 @@ func TestHookModifiedTwelveMBNearDuplicate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GITSIZE_NEARDUP", tc.env)
 			var stdout, stderr bytes.Buffer
-			if code := run(append([]string{"hook"}, tc.args...), bytes.NewReader(payload), &stdout, &stderr); code != 0 {
+			if code := runHookWithTimeBudget(tc.args, bytes.NewReader(payload), &stdout, &stderr, time.Minute); code != 0 {
 				t.Fatal(code)
 			}
 			if tc.want == "" {

@@ -23,6 +23,9 @@ type NearDupConfig struct {
 	Enabled   bool
 	Threshold float64
 	MinBytes  int64
+	// TimeBudget overrides the deadline for one check. Nonpositive values use
+	// the production default of five seconds.
+	TimeBudget time.Duration
 }
 
 // DefaultNearDupConfig returns the default near-duplicate settings.
@@ -46,8 +49,11 @@ type nearDupCheck struct {
 	remaining int64
 }
 
-func newNearDupCheck() (*nearDupCheck, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), nearDupTimeBudget)
+func newNearDupCheck(budget time.Duration) (*nearDupCheck, context.CancelFunc) {
+	if budget <= 0 {
+		budget = nearDupTimeBudget
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	return &nearDupCheck{ctx: ctx, remaining: nearDupByteBudget}, cancel
 }
 
@@ -69,7 +75,7 @@ func cancelGitStream(cmd *exec.Cmd, stdout io.Closer) {
 }
 
 func findCandidates(repo string, newSize int64, cfg NearDupConfig) (candidates []candidate, notes []string) {
-	check, cancel := newNearDupCheck()
+	check, cancel := newNearDupCheck(cfg.TimeBudget)
 	defer cancel()
 	return check.findCandidates(repo, newSize, cfg)
 }
@@ -223,7 +229,7 @@ func (c *nearDupCheck) readBlob(repo, oid string, consume func(io.Reader) error)
 }
 
 func chunkCandidate(repo, oid string) ([]similarity.ChunkRef, error) {
-	check, cancel := newNearDupCheck()
+	check, cancel := newNearDupCheck(0)
 	defer cancel()
 	return check.chunkCandidate(repo, oid)
 }
@@ -282,7 +288,7 @@ func CheckNearDuplicate(repo string, file *FileImpact, content io.Reader, cfg Ne
 	if !cfg.Enabled || file.SizeBytes < cfg.MinBytes {
 		return nil
 	}
-	check, cancel := newNearDupCheck()
+	check, cancel := newNearDupCheck(cfg.TimeBudget)
 	defer cancel()
 	return check.annotate(repo, file, cfg, func() ([]similarity.ChunkRef, error) {
 		return similarity.Chunk(nearDupReader{check: check, reader: content})
@@ -324,7 +330,7 @@ func (r *repoScan) nearDuplicates(files []FileImpact, cfg NearDupConfig) []strin
 	if !cfg.Enabled {
 		return nil
 	}
-	check, cancel := newNearDupCheck()
+	check, cancel := newNearDupCheck(cfg.TimeBudget)
 	defer cancel()
 	var notes []string
 	for i := range files {
