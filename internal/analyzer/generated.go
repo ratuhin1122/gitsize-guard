@@ -43,6 +43,7 @@ type generatedCheck struct {
 	maxPaths int
 	notes    []string
 	head     map[string][]byte
+	tracked  map[string]bool
 }
 
 func newGeneratedCheck(budget time.Duration, maxPaths int) (*generatedCheck, context.CancelFunc) {
@@ -122,6 +123,10 @@ func (c *generatedCheck) trackedPrefixes(repo string) (map[string]bool, error) {
 		}
 		count++
 		file := string(name)
+		if c.tracked == nil {
+			c.tracked = make(map[string]bool)
+		}
+		c.tracked[file] = true
 		first, _, _ := strings.Cut(file, "/")
 		prefixes[first] = true
 		if dir := path.Dir(file); dir != "." {
@@ -129,6 +134,29 @@ func (c *generatedCheck) trackedPrefixes(repo string) (map[string]bool, error) {
 		}
 	}
 	return prefixes, nil
+}
+
+// renamedPaths uses Git's rename detection, rather than treating every copy of
+// a HEAD blob as a rename. Copies of tracked content remain new files.
+func (c *generatedCheck) renamedPaths(repo string) (map[string]bool, error) {
+	renamed := make(map[string]bool)
+	if len(c.tracked) == 0 {
+		return renamed, nil
+	}
+	out, err := runGitContext(c.ctx, repo, nil, nil, "diff", "--cached", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--no-color", "--no-relative", "--diff-filter=R", "--")
+	if err != nil {
+		return nil, err
+	}
+	records := bytes.Split(out, []byte{0})
+	for i := 0; i+2 < len(records); i += 3 {
+		if c.skipped() {
+			break
+		}
+		if c.tracked[string(records[i+1])] {
+			renamed[string(records[i+2])] = true
+		}
+	}
+	return renamed, nil
 }
 
 func (c *generatedCheck) ignoredByGitignore(repo string, paths []string) (map[string]bool, error) {
@@ -288,6 +316,28 @@ func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig, check
 	if len(check.notes) > headNoteStart {
 		return check.notes[noteStart:]
 	}
+	// Remove tracked files before checking renames, ignores, or headers. They
+	// must not consume the candidate cap or produce generated-file advice.
+	untracked := selected[:0]
+	untrackedIndices := indices[:0]
+	for i, file := range selected {
+		if !check.tracked[file.FilePath] {
+			untracked = append(untracked, file)
+			untrackedIndices = append(untrackedIndices, indices[i])
+		}
+	}
+	selected, indices = untracked, untrackedIndices
+	files = selected
+	if len(files) == 0 {
+		return check.notes[noteStart:]
+	}
+	renamed, err := check.renamedPaths(r.root)
+	if err != nil {
+		if !check.skipped() {
+			check.notes = append(check.notes, fmt.Sprintf("Generated-file rename check skipped: %v", err))
+		}
+		return check.notes[noteStart:]
+	}
 	if len(files) > check.maxPaths {
 		check.capNote()
 		files = files[:check.maxPaths]
@@ -306,6 +356,9 @@ func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig, check
 			break
 		}
 		file := &files[i]
+		if check.tracked[file.FilePath] || renamed[file.FilePath] {
+			continue
+		}
 		cand := r.cands[file.FilePath]
 		if cand == nil {
 			continue
@@ -424,6 +477,19 @@ func CheckGenerated(repo string, file *FileImpact, head []byte, cfg GeneratedCon
 	}
 	if len(check.notes) > 0 {
 		return check.notes
+	}
+	if check.tracked[filepath.ToSlash(file.FilePath)] {
+		return nil
+	}
+	renamed, err := check.renamedPaths(repo)
+	if err != nil {
+		if check.skipped() {
+			return check.notes
+		}
+		return []string{fmt.Sprintf("Generated-file rename check skipped: %v", err)}
+	}
+	if renamed[filepath.ToSlash(file.FilePath)] {
+		return nil
 	}
 	ignored, err := check.ignoredByGitignore(repo, []string{file.FilePath})
 	if err != nil {

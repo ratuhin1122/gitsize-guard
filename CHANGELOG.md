@@ -2,6 +2,9 @@
 
 ## v0.4.0
 
+- Skip generated-file classification for exact HEAD paths and Git-detected staged renames, including modified logs, launcher scripts, and content markers; retain detection for new copies.
+- Demote logs, source maps, minified assets, native binaries/object files, and the `coverage` directory to weak evidence. Weak matches alone appear in CLI output only; the hook stays silent unless strict-weak mode is enabled.
+- Add Taintwatch regressions for intentional tracked logs and `bin/` files, rename coverage, and hook-silence checks for ambiguous new files.
 - Add advisory generated-file awareness for selected working-tree files, staged blobs, and in-memory Write payloads, using path rules and generated-code markers in the first 2048 bytes.
 - Distinguish strong evidence (ask at low size risk) from weak evidence (notes by default), suppress matched folders already tracked in HEAD, and aggregate findings by category with counts and total file size.
 - Treat ignored files being force-added as strong evidence. Include already-staged paths selected by `git add` as advisory-only entries without adding to measured growth.

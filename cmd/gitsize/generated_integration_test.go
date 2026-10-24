@@ -109,6 +109,51 @@ func TestGeneratedReadOnlyIntegration(t *testing.T) {
 			}, count: 142, category: "dependencies", confidence: "strong",
 		},
 		{
+			name: "new staged log is weak and hook stays silent",
+			setup: func(t *testing.T, repo string) string {
+				file := filepath.FromSlash("server.log")
+				writeFile(t, filepath.Join(repo, file), []byte("intentional distributable or evidence\n"))
+				git(t, repo, "add", "--", file)
+				return "git commit -m integration"
+			}, count: 1, category: "logs", confidence: "weak", weak: true,
+		},
+		{
+			name: "new staged map is weak and hook stays silent",
+			setup: func(t *testing.T, repo string) string {
+				file := filepath.FromSlash("bundle.js.map")
+				writeFile(t, filepath.Join(repo, file), []byte("intentional distributable or evidence\n"))
+				git(t, repo, "add", "--", file)
+				return "git commit -m integration"
+			}, count: 1, category: "build-output", confidence: "weak", weak: true,
+		},
+		{
+			name: "new staged minified JS is weak and hook stays silent",
+			setup: func(t *testing.T, repo string) string {
+				file := filepath.FromSlash("bundle.min.js")
+				writeFile(t, filepath.Join(repo, file), []byte("intentional distributable or evidence\n"))
+				git(t, repo, "add", "--", file)
+				return "git commit -m integration"
+			}, count: 1, category: "build-output", confidence: "weak", weak: true,
+		},
+		{
+			name: "new staged binary is weak and hook stays silent",
+			setup: func(t *testing.T, repo string) string {
+				file := filepath.FromSlash("tool.exe")
+				writeFile(t, filepath.Join(repo, file), []byte("intentional distributable or evidence\n"))
+				git(t, repo, "add", "--", file)
+				return "git commit -m integration"
+			}, count: 1, category: "build-output", confidence: "weak", weak: true,
+		},
+		{
+			name: "new staged coverage is weak and hook stays silent",
+			setup: func(t *testing.T, repo string) string {
+				file := filepath.FromSlash("coverage/report.txt")
+				writeFile(t, filepath.Join(repo, file), []byte("intentional distributable or evidence\n"))
+				git(t, repo, "add", "--", file)
+				return "git commit -m integration"
+			}, count: 1, category: "coverage", confidence: "weak", weak: true,
+		},
+		{
 			name: "new staged dist is weak note only",
 			setup: func(t *testing.T, repo string) string {
 				file := filepath.Join("dist", "bundle.js")

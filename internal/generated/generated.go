@@ -30,38 +30,39 @@ var strongSegments = map[string]string{
 	".gradle":       "cache",
 	".pytest_cache": "cache",
 	".mypy_cache":   "cache",
-	"coverage":      "coverage",
 	".nyc_output":   "coverage",
 	"htmlcov":       "coverage",
 	".terraform":    "dependencies",
 }
 
 var weakSegments = map[string]string{
-	"dist":   "build-output",
-	"build":  "build-output",
-	"out":    "build-output",
-	"target": "build-output",
-	"vendor": "dependencies",
-	"bin":    "build-output",
-	"obj":    "build-output",
-	".cache": "cache",
+	"coverage": "coverage",
+	"dist":     "build-output",
+	"build":    "build-output",
+	"out":      "build-output",
+	"target":   "build-output",
+	"vendor":   "dependencies",
+	"bin":      "build-output",
+	"obj":      "build-output",
+	".cache":   "cache",
 }
 
 var fileRules = []struct {
 	suffix, category string
+	confidence       Confidence
 }{
-	{".pyc", "cache"}, {".pyo", "cache"},
-	{".class", "build-output"}, {".o", "build-output"},
-	{".obj", "build-output"}, {".exe", "build-output"},
-	{".dll", "build-output"}, {".so", "build-output"},
-	{".dylib", "build-output"}, {".min.js", "build-output"},
-	{".min.css", "build-output"}, {".map", "build-output"},
-	{".log", "logs"},
+	{".pyc", "cache", Strong}, {".pyo", "cache", Strong},
+	{".class", "build-output", Strong}, {".o", "build-output", Weak},
+	{".obj", "build-output", Weak}, {".exe", "build-output", Weak},
+	{".dll", "build-output", Weak}, {".so", "build-output", Weak},
+	{".dylib", "build-output", Weak}, {".min.js", "build-output", Weak},
+	{".min.css", "build-output", Weak}, {".map", "build-output", Weak},
+	{".log", "logs", Weak},
 }
 
 // Classify normalizes separators and a leading ./ before matching whole path
-// segments or strong filename rules. Strong matches take precedence over weak
-// matches. Weak rules require a directory segment, not a bare filename; callers
+// segments or filename rules. Strong matches take precedence over weak
+// matches. Directory rules require a directory segment; callers
 // can identify a directory itself with a trailing slash. Rule is the matched
 // segment, filename, or wildcard pattern (for example, node_modules or *.pyc).
 func Classify(path string) (Match, bool) {
@@ -80,7 +81,7 @@ func Classify(path string) (Match, bool) {
 	}
 	for _, rule := range fileRules {
 		if strings.HasSuffix(name, rule.suffix) {
-			return Match{rule.category, Strong, "*" + rule.suffix}, true
+			return Match{rule.category, rule.confidence, "*" + rule.suffix}, true
 		}
 	}
 	for _, segment := range segments[:len(segments)-1] {
