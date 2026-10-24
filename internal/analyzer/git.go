@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -19,7 +20,12 @@ var gitEnv = []string{"GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0"}
 // runGit runs git in dir with optional stdin and extra environment, and
 // returns stdout. Errors include git's stderr.
 func runGit(dir string, stdin []byte, env []string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
+	return runGitContext(context.Background(), dir, stdin, env, args...)
+}
+
+func runGitContext(ctx context.Context, dir string, stdin []byte, env []string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = 250 * time.Millisecond
 	cmd.Dir = dir
 	cmd.Env = append(append(os.Environ(), gitEnv...), env...)
 	if stdin != nil {
@@ -122,13 +128,18 @@ func objectSizes(dir string, env, ids []string) (map[string]int64, error) {
 	return sizes, nil
 }
 
+// listHeadTree is the shared read-only HEAD tree listing.
+func listHeadTree(ctx context.Context, root string) ([]byte, error) {
+	return runGitContext(ctx, root, nil, nil, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+}
+
 // readHead returns the set of blob ids in HEAD's tree. It reads only trees
 // (never blob contents), so it is cheap and needs no network in a partial
 // clone. An unborn HEAD, or a tree that cannot be read, yields an empty set,
 // so nothing is wrongly treated as already stored.
 func readHead(root string) map[string]bool {
 	blobs := map[string]bool{}
-	out, err := runGit(root, nil, nil, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+	out, err := listHeadTree(context.Background(), root)
 	if err != nil {
 		return blobs
 	}
