@@ -5,12 +5,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/ratuhin1122/gitsize-guard/internal/generated"
 )
+
+// GeneratedConfig controls generated-file advisories independently of similarity.
+type GeneratedConfig struct {
+	Enabled    bool
+	TimeBudget time.Duration
+	MaxPaths   int
+}
+
+func DefaultGeneratedConfig() GeneratedConfig { return GeneratedConfig{Enabled: true} }
 
 const (
 	generatedTimeBudget = 5 * time.Second
@@ -147,4 +161,241 @@ func (c *generatedCheck) ignoredByGitignore(repo string, paths []string) (map[st
 		}
 	}
 	return ignored, nil
+}
+
+// generatedFolder identifies the matched directory, or the containing directory
+// for a filename/content rule. A parent like src/ alone does not suppress a new
+// src/node_modules/ directory.
+func generatedFolder(file, rule string) string {
+	parts := strings.Split(filepath.ToSlash(file), "/")
+	for i, part := range parts[:len(parts)-1] {
+		if part == rule {
+			return strings.Join(parts[:i+1], "/")
+		}
+	}
+	return path.Dir(filepath.ToSlash(file))
+}
+
+func generatedSuppressed(folder string, prefixes map[string]bool) bool {
+	if folder == "." {
+		return false
+	}
+	if prefixes[folder] {
+		return true
+	}
+	for prefix := range prefixes {
+		if strings.HasPrefix(prefix, folder+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *generatedCheck) annotateGenerated(file *FileImpact, head []byte, prefixes, ignored map[string]bool) {
+	match, ok := generated.Classify(file.FilePath)
+	if ok && generatedSuppressed(generatedFolder(file.FilePath, match.Rule), prefixes) {
+		return
+	}
+	if !ok || match.Confidence == generated.Weak {
+		if contentMatch, found := generated.ClassifyContent(head); found {
+			match, ok = contentMatch, true
+		}
+	}
+	isIgnored := ignored[filepath.ToSlash(file.FilePath)]
+	if !ok && isIgnored {
+		match, ok = generated.Match{Category: "ignored", Confidence: generated.Strong, Rule: ".gitignore"}, true
+	}
+	if !ok || generatedSuppressed(generatedFolder(file.FilePath, match.Rule), prefixes) {
+		return
+	}
+	confidence := "weak"
+	if match.Confidence == generated.Strong || isIgnored {
+		confidence = "strong"
+	}
+	file.Generated = &Generated{Category: match.Category, Confidence: confidence, Rule: match.Rule, IgnoredByGitignore: isIgnored}
+}
+
+func (c *generatedCheck) blobHead(repo, oid string) ([]byte, error) {
+	cmd := (&nearDupCheck{ctx: c.ctx}).command(repo, "cat-file", "blob", oid)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cancelGitStream(cmd, stdout)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	head, readErr := io.ReadAll(io.LimitReader(stdout, 2048))
+	_ = stdout.Close()
+	// Only the prefix is needed; do not drain the rest of a staged blob.
+	if len(head) == 2048 || readErr != nil {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
+	if c.ctx.Err() != nil {
+		return nil, c.ctx.Err()
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if len(head) < 2048 && waitErr != nil {
+		return nil, waitErr
+	}
+	return head, nil
+}
+
+func (r *repoScan) generatedFiles(files []FileImpact, cfg GeneratedConfig) []string {
+	if !cfg.Enabled || len(files) == 0 {
+		return nil
+	}
+	check, cancel := newGeneratedCheck(cfg.TimeBudget, cfg.MaxPaths)
+	defer cancel()
+	if r.headTree != nil {
+		check.head[r.root] = r.headTree
+	}
+	prefixes, err := check.trackedPrefixes(r.root)
+	if err != nil {
+		return []string{fmt.Sprintf("Generated-file check skipped: %v", err)}
+	}
+	// Incomplete HEAD knowledge must not flag intentionally tracked folders.
+	if len(check.notes) > 0 {
+		return check.notes
+	}
+	if len(files) > check.maxPaths {
+		check.capNote()
+		files = files[:check.maxPaths]
+	}
+	paths := make([]string, len(files))
+	for i := range files {
+		paths[i] = files[i].FilePath
+	}
+	ignored, err := check.ignoredByGitignore(r.root, paths)
+	if err != nil {
+		check.notes = append(check.notes, fmt.Sprintf("Generated-file ignore check skipped: %v", err))
+		return check.notes
+	}
+	for i := range files {
+		if check.skipped() {
+			break
+		}
+		file := &files[i]
+		cand := r.cands[file.FilePath]
+		if cand == nil {
+			continue
+		}
+		if match, ok := generated.Classify(file.FilePath); ok && (match.Confidence == generated.Strong || generatedSuppressed(generatedFolder(file.FilePath, match.Rule), prefixes)) {
+			check.annotateGenerated(file, nil, prefixes, ignored)
+			continue
+		}
+		var head []byte
+		if cand.blob != "" {
+			head, err = check.blobHead(r.root, cand.blob)
+		} else {
+			var info os.FileInfo
+			info, err = os.Lstat(r.abs(file.FilePath))
+			if err == nil && !info.Mode().IsRegular() {
+				continue
+			}
+			if err == nil {
+				var reader *os.File
+				reader, err = os.Open(r.abs(file.FilePath))
+				if err == nil {
+					head, err = io.ReadAll(io.LimitReader(reader, 2048))
+					_ = reader.Close()
+				}
+			}
+		}
+		if err != nil {
+			check.notes = append(check.notes, fmt.Sprintf("Generated-file header skipped for %q: %v", file.FilePath, err))
+		}
+		check.annotateGenerated(file, head, prefixes, ignored)
+	}
+	return check.notes
+}
+
+// CheckGenerated annotates Write content supplied in memory. It never changes
+// measured bytes; NewReport applies advisory policy and aggregation.
+func CheckGenerated(repo string, file *FileImpact, head []byte, cfg GeneratedConfig) []string {
+	if !cfg.Enabled {
+		return nil
+	}
+	check, cancel := newGeneratedCheck(cfg.TimeBudget, cfg.MaxPaths)
+	defer cancel()
+	prefixes, err := check.trackedPrefixes(repo)
+	if err != nil {
+		return []string{fmt.Sprintf("Generated-file check skipped: %v", err)}
+	}
+	if len(check.notes) > 0 {
+		return check.notes
+	}
+	ignored, err := check.ignoredByGitignore(repo, []string{file.FilePath})
+	if err != nil {
+		return []string{fmt.Sprintf("Generated-file ignore check skipped: %v", err)}
+	}
+	if check.skipped() {
+		return check.notes
+	}
+	check.annotateGenerated(file, head[:min(len(head), 2048)], prefixes, ignored)
+	return check.notes
+}
+
+func applyGeneratedReport(report *Report, files []FileImpact) {
+	type group struct {
+		count   int
+		size    int64
+		folders map[string]bool
+	}
+	groups := map[string]*group{}
+	for _, file := range files {
+		if file.Generated == nil {
+			continue
+		}
+		g := file.Generated
+		if report.GeneratedByCategory == nil {
+			report.GeneratedByCategory = map[string]int{}
+		}
+		report.GeneratedFiles++
+		report.GeneratedByCategory[g.Category]++
+		key := g.Confidence + ":" + g.Category
+		if groups[key] == nil {
+			groups[key] = &group{folders: map[string]bool{}}
+		}
+		groups[key].count++
+		groups[key].size += file.SizeBytes
+		groups[key].folders[generatedFolder(file.FilePath, g.Rule)] = true
+	}
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	strong := false
+	for _, key := range keys {
+		g := groups[key]
+		confidence, category, _ := strings.Cut(key, ":")
+		label := category + " paths"
+		if len(g.folders) == 1 {
+			for folder := range g.folders {
+				if folder != "." {
+					label = folder + "/"
+				}
+			}
+		}
+		text := fmt.Sprintf("%s looks like generated or dependency files that usually should not be committed (%d files, %s total; %s).", label, g.count, HumanReadableSize(g.size), category)
+		if confidence == "strong" {
+			report.Reasons = append(report.Reasons, text)
+			strong = true
+		} else {
+			report.Notes = append(report.Notes, "Possible generated files (weak evidence): "+text)
+		}
+	}
+	if strong {
+		if report.RiskLevel == RiskLow {
+			report.RiskLevel = RiskMedium
+		}
+		if report.Recommendation != "" {
+			report.Recommendation += " "
+		}
+		report.Recommendation += "Add the folder to .gitignore; if already staged, run git rm -r --cached <folder>. Keep build artifacts in release assets or CI artifacts."
+	}
 }

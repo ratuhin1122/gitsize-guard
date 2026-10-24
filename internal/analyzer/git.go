@@ -143,6 +143,11 @@ func readHead(root string) map[string]bool {
 	if err != nil {
 		return blobs
 	}
+	return headBlobIDs(out)
+}
+
+func headBlobIDs(out []byte) map[string]bool {
+	blobs := map[string]bool{}
 	// Records are "<mode> <type> <id>" TAB <path>.
 	for _, rec := range bytes.Split(out, []byte{0}) {
 		meta, _, ok := bytes.Cut(rec, []byte{'\t'})

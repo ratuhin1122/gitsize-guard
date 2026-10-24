@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -62,6 +63,11 @@ func Analyze(sels []Selection, t Thresholds) (*Report, error) {
 
 // AnalyzeWithNearDup is Analyze with explicit advisory detection settings.
 func AnalyzeWithNearDup(sels []Selection, t Thresholds, cfg NearDupConfig) (*Report, error) {
+	return AnalyzeWithConfig(sels, t, cfg, DefaultGeneratedConfig())
+}
+
+// AnalyzeWithConfig applies independent content advisory settings.
+func AnalyzeWithConfig(sels []Selection, t Thresholds, cfg NearDupConfig, generatedCfg GeneratedConfig) (*Report, error) {
 	scans := map[string]*repoScan{}
 	var roots []string
 	var errs []error
@@ -89,6 +95,7 @@ func AnalyzeWithNearDup(sels []Selection, t Thresholds, cfg NearDupConfig) (*Rep
 			errs = append(errs, err) // files is still the best available measurement
 		}
 		notes = append(notes, scans[root].nearDuplicates(files, cfg)...)
+		notes = append(notes, scans[root].generatedFiles(files, generatedCfg)...)
 		if len(roots) > 1 { // say which repository each file is in
 			for i := range files {
 				files[i].FilePath = filepath.ToSlash(filepath.Join(root, filepath.FromSlash(files[i].FilePath)))
@@ -101,7 +108,7 @@ func AnalyzeWithNearDup(sels []Selection, t Thresholds, cfg NearDupConfig) (*Rep
 	if worst == nil {
 		worst = NewReport(nil, t)
 	}
-	worst.Notes = notes
+	worst.Notes = append(worst.Notes, notes...)
 	return worst, errors.Join(errs...)
 }
 
@@ -127,6 +134,7 @@ type repoScan struct {
 	cands     map[string]*candidate
 	order     []string
 	noFilters []string // -c options that disable configured filters; nil until needed
+	headTree  []byte   // shared with generated-file checks once exact deduplication reads HEAD
 }
 
 // put records c. Working-tree content supersedes a staged blob for the same
@@ -289,7 +297,13 @@ func (r *repoScan) measure() ([]FileImpact, error) {
 	var head map[string]bool // read lazily: only needed for staged or large files
 	inHead := func(id string) bool {
 		if head == nil {
-			head = readHead(r.root)
+			var err error
+			r.headTree, err = listHeadTree(context.Background(), r.root)
+			if err != nil {
+				head = map[string]bool{}
+			} else {
+				head = headBlobIDs(r.headTree)
+			}
 		}
 		return head[id]
 	}
@@ -420,6 +434,7 @@ func (r *repoScan) abs(rel string) string {
 
 // NewReport sorts files by growth (largest first) and classifies their total.
 func NewReport(files []FileImpact, t Thresholds) *Report {
+	allFiles := files
 	sort.SliceStable(files, func(i, j int) bool { return files[i].GrowthBytes > files[j].GrowthBytes })
 
 	var total int64
@@ -461,5 +476,6 @@ func NewReport(files []FileImpact, t Thresholds) *Report {
 		}
 		report.Recommendation += "Replace the existing file instead of adding a new copy, or track versions with Git LFS / external storage."
 	}
+	applyGeneratedReport(report, allFiles)
 	return report
 }
