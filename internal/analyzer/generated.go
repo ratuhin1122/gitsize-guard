@@ -22,7 +22,9 @@ type GeneratedConfig struct {
 	Enabled    bool
 	StrictWeak bool
 	// A nil Allow loads .gitsizeallow; a non-nil list overrides it.
-	Allow      []string
+	Allow []string
+	// Nonpositive limits retain the production defaults (5 seconds / 5000
+	// paths). Tests can override either limit without changing those defaults.
 	TimeBudget time.Duration
 	MaxPaths   int
 }

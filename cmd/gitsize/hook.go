@@ -29,6 +29,13 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // runHookWithTimeBudget allows callers to override only the advisory deadline;
 // flags, environment validation and permission decisions use the normal path.
 func runHookWithTimeBudget(args []string, stdin io.Reader, stdout, stderr io.Writer, budget time.Duration) int {
+	return runHookWithBudgets(args, stdin, stdout, stderr, budget, 0, 0)
+}
+
+// runHookWithBudgets injects only advisory resource limits for tests. Zero
+// values preserve the production defaults; configuration and decisions use
+// the same path as runHook.
+func runHookWithBudgets(args []string, stdin io.Reader, stdout, stderr io.Writer, budget, generatedBudget time.Duration, generatedMaxPaths int) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	warningMB, failureMB := thresholdFlags(fs)
@@ -41,6 +48,8 @@ func runHookWithTimeBudget(args []string, stdin io.Reader, stdout, stderr io.Wri
 	thresholds, configErr := resolveThresholds(fs, *warningMB, *failureMB)
 	cfg, nearDupErr := resolveNearDup(fs, nearDup)
 	generatedCfg, generatedErr := resolveGenerated(fs, generated)
+	generatedCfg.TimeBudget = generatedBudget
+	generatedCfg.MaxPaths = generatedMaxPaths
 	cfg.TimeBudget = budget
 	configErr = errors.Join(parseErr, configErr, nearDupErr, generatedErr)
 	if configErr != nil {
