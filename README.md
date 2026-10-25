@@ -57,6 +57,7 @@ You can also send a simulated PreToolUse JSON payload to [hooks/pretooluse-gitsi
 - Blocks oversized `Write` payloads and `git add` / `git commit` operations.
 - Detects exact content reuse against `HEAD` so eligible duplicate blobs add zero measured growth.
 - Warns about near-duplicates of another HEAD path (**v0.3.0**, advisory only).
+- Flags likely generated files and dependency trees (**v0.4.0**, advisory only), with confidence tiers and allowlists.
 - Measures Git LFS pointers without executing the LFS filter.
 - Never writes objects or refreshes the index in your repository's `.git` directory.
 - Uses deterministic measurements and chunking; no AI participates in measuring content. Time budgets can affect whether an advisory completes.
@@ -138,11 +139,12 @@ Growth means **uncompressed new blob bytes**, counted per repository; it is not 
 | Exact growth reaches 50 MB (default) | `ask` |
 | Estimated growth reaches a threshold | `ask` |
 | Near-duplicate found while size risk is low | `ask`; growth stays unchanged |
+| Strong generated-file match (or strict weak match) while size risk is low | `ask`; growth stays unchanged |
 | Files/index change before staging or committing in the same command | `deny`; run the Git step separately |
 | Unresolved repository or Git analysis error | Usually `ask`; see failure modes below |
 | No actionable risk | No output; normal Claude Code permissions apply |
 
-The hook **never emits `allow`**. Reasons accompany `deny` and `ask` decisions, including near-duplicate advice. Gitignored `Write` targets are skipped.
+The hook **never emits `allow`**. Reasons accompany `deny` and `ask` decisions, including near-duplicate and generated-file advice. Gitignored `Write` targets are skipped.
 
 <details>
 <summary>Measurement details, CLI, and security model</summary>
@@ -172,7 +174,7 @@ Source builds are cached per checkout and isolated from `GOOS`, `GOARCH`, `GOFLA
 
 Defaults: **50 MB warning**, **100 MB block**, and near-duplicate detection enabled at **90% similarity** for files of **5 MiB or more**. Size options named `MB` use 1,048,576 bytes (MiB).
 
-Set environment variables **before launching Claude Code**. Commands run by Claude cannot change the hook's parent environment. Explicit flags override the corresponding environment variable independently; the threshold and near-duplicate flags work with both `analyze` and `hook`.
+Set environment variables **before launching Claude Code**. Commands run by Claude cannot change the hook's parent environment. Explicit flags override the corresponding environment variable independently; the threshold, near-duplicate, and generated-file flags work with both `analyze` and `hook`.
 
 <details>
 <summary>All configuration flags and environment variables</summary>
@@ -184,6 +186,9 @@ Set environment variables **before launching Claude Code**. Commands run by Clau
 | `--near-dup=<bool>` | `GITSIZE_NEARDUP` | `true` / `1` | Flag: `true` / `false`; env: `0` / `1` |
 | `--near-dup-threshold` | `GITSIZE_NEARDUP_THRESHOLD` | `0.90` | Finite number from `0.5` to `1.0` |
 | `--near-dup-min-mb` | `GITSIZE_NEARDUP_MIN_MB` | `5` | Whole MiB, `1`–`1048576` |
+| `--generated=<bool>` | `GITSIZE_GENERATED` | `true` / `1` | Flag: `true` / `false`; env: `0` / `1` |
+| `--generated-allow <glob>` | `GITSIZE_GENERATED_ALLOW` | `.gitsizeallow`, if present | Repeat the flag; separate env globs with commas |
+| `--generated-strict-weak=<bool>` | `GITSIZE_GENERATED_STRICT_WEAK` | `false` / `0` | Ask on weak evidence; env: `0` / `1` |
 | — | `GITSIZE_BIN` | — | Absolute path to a trusted binary instead of building |
 
 Setting only one size threshold moves the other to meet it if necessary: `GITSIZE_FAILURE_MB=40` alone lowers the warning to 40 MB.
@@ -212,13 +217,87 @@ Matches add per-file `near_duplicate` metadata (`path`, `similarity`, `shared_by
 
 </details>
 
+## Generated-file awareness
+
+Enabled by default in **v0.4.0**, this advisory detects likely dependency trees, caches, build output, coverage reports, compiled/minified files, source maps, logs, OS metadata, and generated-code headers. It checks selected working-tree files, staged blobs, and `Write` content; content inspection reads only the first **2048 bytes**. It groups findings by category into a count and total file size, rather than emitting one reason per file.
+
+| Confidence | Default behavior |
+| --- | --- |
+| **Strong** | Raises low risk to medium so the hook asks for confirmation. |
+| **Weak** | Adds a CLI report note without changing risk. `--generated-strict-weak` requests the same confirmation as strong evidence; JSON confidence remains `weak`. |
+
+**By default, weak matches alone appear in CLI output only; the hook stays silent.** This includes a new `dist/` folder. Enable `--generated-strict-weak` to request confirmation for weak matches. Weak notes may also accompany an `ask` or `deny` already triggered by another finding.
+
+Files whose paths already exist in **HEAD** are skipped entirely, including modified files and generated-code headers. Staged renames detected by Git from a tracked HEAD path are also skipped; copying a tracked file to a new path is still a new file.
+
+A matching folder already represented by files in **HEAD** is suppressed, with no generated-file annotation or note. Merely staging a folder does not count as intentional HEAD content. Files ignored by Git but being added anyway (for example, with `git add -f`) provide strong evidence, subject to the same allowlist and HEAD suppression rules.
+
+Generated-file advice **never changes `growth_bytes`, lowers risk, or raises risk above medium**. Existing size-based denials still apply. Recommendations include adding the folder to `.gitignore`, running `git rm -r --cached <folder>` if already staged, or storing build output in release assets or CI artifacts. The guard does not run those fixes for you.
+
+<details>
+<summary>Detection rules</summary>
+
+- **Strong path segments:** `node_modules`, `__pycache__`, `.next`, `.nuxt`, `.gradle`, `.pytest_cache`, `.mypy_cache`, `.nyc_output`, `htmlcov`, `.terraform`.
+- **Strong filenames:** `*.pyc`, `*.pyo`, `*.class`, `.DS_Store`, `Thumbs.db`.
+- **Weak filenames:** `*.log`, `*.map`, `*.min.js`, `*.min.css`, `*.exe`, `*.dll`, `*.so`, `*.dylib`, `*.o`, `*.obj`. These can be intentional distributions or retained evidence.
+- **Weak directory segments:** `dist`, `build`, `out`, `target`, `vendor`, `bin`, `obj`, `.cache`, `coverage`. Names such as `rebuild` and `builder.go` do not match.
+- **Strong content markers:** `Code generated` together with `DO NOT EDIT` on one line, `@generated`, `This file was automatically generated`, or `auto-generated by`. The last two are case-insensitive. A NUL byte in the inspected prefix disables content-marker matching.
+
+Path rules normalize backslashes and a leading `./`. They match whole directory segments and are case-sensitive except for `.DS_Store` and `Thumbs.db`.
+
+</details>
+
+### Settings and allowlists
+
+| Flag | Environment variable | Default |
+| --- | --- | --- |
+| `--generated=<bool>` | `GITSIZE_GENERATED` (`0` / `1`) | Enabled |
+| `--generated-allow <glob>` (repeatable) | `GITSIZE_GENERATED_ALLOW` (comma-separated globs) | Repository `.gitsizeallow`, if present |
+| `--generated-strict-weak=<bool>` | `GITSIZE_GENERATED_STRICT_WEAK` (`0` / `1`) | Disabled |
+
+Allowlist precedence is **explicit flags → nonempty environment setting → repository file**. The winning list replaces the lower-priority lists; they are not merged. Allowlisted paths produce no generated-file annotation, reason, or note. They remain subject to size and near-duplicate checks. Invalid boolean values, globs, or repository-file settings are surfaced through an `ask` in the hook; an existing `deny` remains a `deny`. `analyze` returns an error for invalid configuration.
+
+Create an optional `.gitsizeallow` in the repository root, with one glob per line. Blank lines and `#` comments (including trailing comments) are ignored. The file is read-only and capped at **64 KiB**:
+
+```text
+# Deliberately checked-in output
+dist/**
+vendor/**
+```
+
+Globs are relative to the repository root and case-sensitive. Both slash styles are accepted. `*` and `?` stay within a path segment; a whole `**` segment spans zero or more directories. A trailing slash allows a directory tree, so `dist/` also covers its descendants.
+
+```bash
+gitsize analyze --staged --generated-strict-weak
+gitsize analyze --pending --generated-allow 'dist/**' --generated-allow 'vendor/**'
+gitsize analyze --pending --generated=false
+```
+
+<details>
+<summary>Budgets and JSON output</summary>
+
+Production checks retain a **5-second time budget** and a **5,000-path cap**. Skipped work is recorded in CLI report `notes`. Tests can inject different limits; large-tree tests use a 60-second budget without changing production defaults.
+
+Per-file `generated` metadata contains `category`, `confidence` (`strong` or `weak`), `rule`, and `ignored_by_gitignore`. Reports include `generated_files`, a `generated_by_category` count map, and notes as needed.
+
+</details>
+
+### Generated-file limitations
+
+- Path and marker heuristics can misfire; use the allowlist for intentional files.
+- Only inspects files being added through the checked staging/commit selection or supplied by a `Write` call; it is not a repository-wide audit.
+- **Advisory only: asks, never denies on its own.** Weak evidence normally adds only a note. Size-based denials remain independent.
+- Does not remove files already committed, unstage files, or rewrite history.
+- Budget exhaustion can skip an advisory. A skip note alone does not trigger a hook decision, so a low-size-risk check can return empty output with exit `0`.
+
 ## Limitations
 
 - Only Claude Code **Bash and Write tool calls** trigger the hook. Manual Git commits and the `Edit` tool bypass it. For external commits, consider a separate pre-commit check using `gitsize analyze --staged`.
 - Bash detection uses **static, best-effort parsing**. Ambiguous selections are estimated from pending files and prompt for confirmation.
 - Duplicate detection compares against **HEAD only**, not other staged files or older history.
 - Already-compressed ZIP, MP4, and some model formats may share few chunks despite semantic similarity. Chunk overlap does not replace Git's pack delta compression.
-- The hook **can fail open**: a crash or timeout can produce empty output with exit `0`. A skipped near-duplicate advisory can also leave no decision when measured size risk is low; completed size checks still apply.
+- The hook **can fail open (empty stdout, exit `0`)**. The [shell shim](hooks/pretooluse-gitsize.sh) prints only successful, nonempty binary output and then exits `0`; a failed or timed-out binary can therefore leave no permission decision. Invalid hook JSON also produces no decision: the [Go runner](cmd/gitsize/hook.go) logs the decode error to stderr and returns `0`.
+- If a near-duplicate or generated-file deadline expires while measured size risk is low, the skip note stays in the CLI report and does not itself trigger an `ask`. The [tiny-budget regression test](cmd/gitsize/generated_budget_test.go) reproduces exit `0` with both stdout and stderr empty. **A budget skip does not override a completed size-based warning or denial.** This reproduction does not establish why the earlier oversized-file check returned no decision; that cause remains unresolved.
 - Windows test-suite gaps are tracked in [issue #2](https://github.com/ratuhin1122/gitsize-guard/issues/2). See [VERIFICATION.md](VERIFICATION.md) for recorded checks.
 - **Not yet tested in a live Claude Code session.** The demo remains a placeholder.
 
@@ -239,7 +318,6 @@ Matches add per-file `near_duplicate` metadata (`path`, `similarity`, `shared_by
 
 - Verify the plugin in a live Claude Code session and record the demo.
 - Address the Windows test-suite gaps in issue #2.
-- Add generated-file awareness for directories such as `dist`, `build`, and `coverage`.
 - Explore historical repository-growth tracking.
 
 ## Contributing

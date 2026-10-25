@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0
+
+- Skip generated-file classification for exact HEAD paths and Git-detected staged renames, including modified logs, launcher scripts, and content markers; retain detection for new copies.
+- Demote logs, source maps, minified assets, native binaries/object files, and the `coverage` directory to weak evidence. Weak matches alone appear in CLI output only; the hook stays silent unless strict-weak mode is enabled.
+- Add Taintwatch regressions for intentional tracked logs and `bin/` files, rename coverage, and hook-silence checks for ambiguous new files.
+- Add advisory generated-file awareness for selected working-tree files, staged blobs, and in-memory Write payloads, using path rules and generated-code markers in the first 2048 bytes.
+- Distinguish strong evidence (ask at low size risk) from weak evidence (notes by default), suppress matched folders already tracked in HEAD, and aggregate findings by category with counts and total file size.
+- Treat ignored files being force-added as strong evidence. Include already-staged paths selected by `git add` as advisory-only entries without adding to measured growth.
+- Add generated-file flags and environment variables, strict-weak mode, and glob allowlists with flag-over-environment-over-file precedence. Read optional `.gitsizeallow` files with a 64 KiB cap and surface invalid settings in hook decisions.
+- Add per-file generated metadata and report-level counts while preserving growth and existing medium/high size risk. Generated-file advice never causes a denial on its own.
+- Keep production resource defaults at 5 seconds and 5000 paths; inject generous test budgets and retain dedicated tiny-budget skip coverage. Record the unchanged empty-output/exit-zero fail-open path when advisory work expires.
+- Add integration coverage for staged dependency trees, HEAD suppression, ignored force-adds, Write headers, allowlists, combined near-duplicate advice, and SHA-256 checksums of every `.git` file.
+- Record three consecutive uncached full race runs matching the 14 known Windows baseline failures, with no new failures, races, panics, or test timeouts. Live Claude Code session testing has not been performed.
+
 ## v0.3.0
 
 - Add advisory near-duplicate detection for working-tree files, staged blobs, and Write payloads, using deterministic content-defined chunking and SHA-256 chunk hashes.

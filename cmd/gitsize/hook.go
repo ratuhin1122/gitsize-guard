@@ -29,18 +29,29 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // runHookWithTimeBudget allows callers to override only the advisory deadline;
 // flags, environment validation and permission decisions use the normal path.
 func runHookWithTimeBudget(args []string, stdin io.Reader, stdout, stderr io.Writer, budget time.Duration) int {
+	return runHookWithBudgets(args, stdin, stdout, stderr, budget, 0, 0)
+}
+
+// runHookWithBudgets injects only advisory resource limits for tests. Zero
+// values preserve the production defaults; configuration and decisions use
+// the same path as runHook.
+func runHookWithBudgets(args []string, stdin io.Reader, stdout, stderr io.Writer, budget, generatedBudget time.Duration, generatedMaxPaths int) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	warningMB, failureMB := thresholdFlags(fs)
 	nearDup := nearDupFlags(fs)
+	generated := generatedFlags(fs)
 	parseErr := fs.Parse(args)
 	if errors.Is(parseErr, flag.ErrHelp) {
 		return 0
 	}
 	thresholds, configErr := resolveThresholds(fs, *warningMB, *failureMB)
 	cfg, nearDupErr := resolveNearDup(fs, nearDup)
+	generatedCfg, generatedErr := resolveGenerated(fs, generated)
+	generatedCfg.TimeBudget = generatedBudget
+	generatedCfg.MaxPaths = generatedMaxPaths
 	cfg.TimeBudget = budget
-	configErr = errors.Join(parseErr, configErr, nearDupErr)
+	configErr = errors.Join(parseErr, configErr, nearDupErr, generatedErr)
 	if configErr != nil {
 		fmt.Fprintf(stderr, "gitsize-guard: %v\n", configErr)
 	}
@@ -51,10 +62,10 @@ func runHookWithTimeBudget(args []string, stdin io.Reader, stdout, stderr io.Wri
 		return 0
 	}
 
-	decision, reason, _ := evaluateWithNearDup(in, thresholds, cfg)
+	decision, reason, _ := evaluateWithConfig(in, thresholds, cfg, generatedCfg)
 	if configErr != nil {
-		note := fmt.Sprintf("gitsize-guard configuration error: %v. Using warning %s / failure %s; near-dup=%t, threshold=%.2f, minimum=%s instead.",
-			configErr, analyzer.HumanReadableSize(thresholds.WarningBytes), analyzer.HumanReadableSize(thresholds.FailureBytes), cfg.Enabled, cfg.Threshold, analyzer.HumanReadableSize(cfg.MinBytes))
+		note := fmt.Sprintf("gitsize-guard configuration error: %v. Using warning %s / failure %s; near-dup=%t, threshold=%.2f, minimum=%s; generated=%t, strict-weak=%t instead.",
+			configErr, analyzer.HumanReadableSize(thresholds.WarningBytes), analyzer.HumanReadableSize(thresholds.FailureBytes), cfg.Enabled, cfg.Threshold, analyzer.HumanReadableSize(cfg.MinBytes), generatedCfg.Enabled, generatedCfg.StrictWeak)
 		switch {
 		case decision != "":
 			reason += "\n(" + note + ")"
@@ -86,6 +97,10 @@ func evaluate(in hookio.Input, th analyzer.Thresholds) (hookio.Decision, string,
 }
 
 func evaluateWithNearDup(in hookio.Input, th analyzer.Thresholds, cfg analyzer.NearDupConfig) (hookio.Decision, string, int64) {
+	return evaluateWithConfig(in, th, cfg, analyzer.DefaultGeneratedConfig())
+}
+
+func evaluateWithConfig(in hookio.Input, th analyzer.Thresholds, cfg analyzer.NearDupConfig, generatedCfg analyzer.GeneratedConfig) (hookio.Decision, string, int64) {
 	cwd := in.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -108,8 +123,8 @@ func evaluateWithNearDup(in hookio.Input, th analyzer.Thresholds, cfg analyzer.N
 				exactSels = append(exactSels, s)
 			}
 		}
-		exact, errExact := analyzer.AnalyzeWithNearDup(exactSels, th, cfg)
-		est, errEst := analyzer.AnalyzeWithNearDup(estSels, th, cfg)
+		exact, errExact := analyzer.AnalyzeWithConfig(exactSels, th, cfg, generatedCfg)
+		est, errEst := analyzer.AnalyzeWithConfig(estSels, th, cfg, generatedCfg)
 		err := errors.Join(errExact, errEst)
 
 		var notes []string
@@ -122,11 +137,16 @@ func evaluateWithNearDup(in hookio.Input, th analyzer.Thresholds, cfg analyzer.N
 		withNotes := func(reason string) string {
 			// Whichever size verdict wins, retain advisories from both reports.
 			for _, report := range []*analyzer.Report{exact, est} {
-				if report.NearDuplicates > 0 {
+				if report.NearDuplicates > 0 || report.GeneratedFiles > 0 {
 					for _, advisory := range report.Reasons {
-						if strings.Contains(advisory, "already in HEAD") && !strings.Contains(reason, advisory) {
+						if (strings.Contains(advisory, "already in HEAD") || strings.Contains(advisory, "looks like generated")) && !strings.Contains(reason, advisory) {
 							reason += "\n" + advisory
 						}
+					}
+				}
+				for _, note := range report.Notes {
+					if !strings.Contains(reason, note) {
+						reason += "\n" + note
 					}
 				}
 			}
@@ -153,17 +173,23 @@ func evaluateWithNearDup(in hookio.Input, th analyzer.Thresholds, cfg analyzer.N
 		return "", "", exact.GrowthBytes
 
 	case "Write":
-		report, exact, err := analyzeWriteWithNearDup(in.ToolInput, cwd, th, cfg)
+		report, exact, err := analyzeWriteWithConfig(in.ToolInput, cwd, th, cfg, generatedCfg)
+		configNote := ""
+		if err != nil && report != nil {
+			configNote = fmt.Sprintf("\ngitsize-guard configuration error: %v", err)
+		}
 		switch {
-		case err != nil:
+		case err != nil && report == nil:
 			return hookio.Ask, fmt.Sprintf("gitsize-guard could not check how much this file adds to the repository: %v", err), 0
 		case report == nil:
 		case report.RiskLevel == analyzer.RiskHigh && exact:
-			return hookio.Deny, describe(report, th, writeBlocked), report.GrowthBytes
+			return hookio.Deny, describe(report, th, writeBlocked) + configNote, report.GrowthBytes
 		case report.RiskLevel == analyzer.RiskHigh:
-			return hookio.Ask, describe(report, th, writeEstimated), report.GrowthBytes
+			return hookio.Ask, describe(report, th, writeEstimated) + configNote, report.GrowthBytes
 		case report.RiskLevel == analyzer.RiskMedium:
-			return hookio.Ask, describe(report, th, writeWarning), report.GrowthBytes
+			return hookio.Ask, describe(report, th, writeWarning) + configNote, report.GrowthBytes
+		case err != nil:
+			return hookio.Ask, strings.TrimSpace(configNote), report.GrowthBytes
 		}
 	}
 	return "", "", 0
@@ -192,15 +218,18 @@ func unseenReason(r *analyzer.Report, th analyzer.Thresholds) string {
 }
 
 // analyzeWrite checks the content a Write call is about to put in a file.
-// Content below both the warning and near-duplicate minimum costs no git calls. exact is
-// false when a filter other than Git LFS applies to the path.
+// exact is false when a filter other than Git LFS applies to the path.
 func analyzeWrite(ti hookio.ToolInput, cwd string, th analyzer.Thresholds) (*analyzer.Report, bool, error) {
 	return analyzeWriteWithNearDup(ti, cwd, th, analyzer.DefaultNearDupConfig())
 }
 
 func analyzeWriteWithNearDup(ti hookio.ToolInput, cwd string, th analyzer.Thresholds, cfg analyzer.NearDupConfig) (*analyzer.Report, bool, error) {
+	return analyzeWriteWithConfig(ti, cwd, th, cfg, analyzer.DefaultGeneratedConfig())
+}
+
+func analyzeWriteWithConfig(ti hookio.ToolInput, cwd string, th analyzer.Thresholds, cfg analyzer.NearDupConfig, generatedCfg analyzer.GeneratedConfig) (*analyzer.Report, bool, error) {
 	size := int64(len(ti.Content))
-	if risk, _ := analyzer.ClassifyRisk(size, th); (risk == analyzer.RiskLow && (!cfg.Enabled || size < cfg.MinBytes)) || ti.FilePath == "" {
+	if ti.FilePath == "" {
 		return nil, true, nil
 	}
 
@@ -229,8 +258,9 @@ func analyzeWriteWithNearDup(ti hookio.ToolInput, cwd string, th analyzer.Thresh
 	if err != nil {
 		return nil, true, nil // outside the work tree
 	}
+	generatedCfg, generatedConfigErr := analyzer.ResolveGeneratedConfig(root, generatedCfg)
 	if _, err := analyzer.RunGitCommand(root, "check-ignore", "-q", "--", rel); err == nil {
-		return nil, true, nil // ignored: will not be committed
+		return nil, true, generatedConfigErr // ignored: will not be committed
 	}
 	growth, exact, err := analyzer.WriteGrowth(root, rel, size)
 	if err != nil {
@@ -245,9 +275,10 @@ func analyzeWriteWithNearDup(ti hookio.ToolInput, cwd string, th analyzer.Thresh
 		ChangeType:  analyzer.ChangeAdded,
 	}
 	notes := analyzer.CheckNearDuplicate(root, &impact, bytes.NewReader([]byte(ti.Content)), cfg)
+	notes = append(notes, analyzer.CheckGenerated(root, &impact, []byte(ti.Content[:min(len(ti.Content), 2048)]), generatedCfg)...)
 	report := analyzer.NewReport([]analyzer.FileImpact{impact}, th)
-	report.Notes = notes
-	return report, exact, nil
+	report.Notes = append(report.Notes, notes...)
+	return report, exact, generatedConfigErr
 }
 
 // relToRoot returns path relative to root, where dir is an existing ancestor
@@ -293,7 +324,9 @@ func describe(r *analyzer.Report, th analyzer.Thresholds, v verdict) string {
 	var b strings.Builder
 	size := analyzer.HumanReadableSize
 	sizeRisk, _ := analyzer.ClassifyRisk(r.GrowthBytes, th)
-	if r.NearDuplicates > 0 && sizeRisk == analyzer.RiskLow && (v == warning || v == writeWarning || v == estimatedWarning) {
+	if r.GeneratedFiles > 0 && sizeRisk == analyzer.RiskLow && (v == warning || v == writeWarning || v == estimatedWarning) {
+		b.WriteString("gitsize-guard found files that look generated or usually should not be committed.")
+	} else if r.NearDuplicates > 0 && sizeRisk == analyzer.RiskLow && (v == warning || v == writeWarning || v == estimatedWarning) {
 		b.WriteString("gitsize-guard found a possible duplicate of a file already in HEAD.")
 	} else {
 		switch v {
@@ -351,7 +384,7 @@ func describe(r *analyzer.Report, th analyzer.Thresholds, v verdict) string {
 	if r.Recommendation != "" {
 		fmt.Fprintf(&b, "\nRecommendation: %s", r.Recommendation)
 	}
-	if r.NearDuplicates > 0 {
+	if r.NearDuplicates > 0 || r.GeneratedFiles > 0 {
 		for _, reason := range r.Reasons {
 			fmt.Fprintf(&b, "\n%s", reason)
 		}

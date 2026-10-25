@@ -36,6 +36,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --near-dup=<bool>     Detect near duplicates (default true, or $GITSIZE_NEARDUP=0/1)")
 	fmt.Fprintln(w, "  --near-dup-threshold <float>  Similarity from 0.5 to 1.0 (default 0.90, or $GITSIZE_NEARDUP_THRESHOLD)")
 	fmt.Fprintln(w, "  --near-dup-min-mb <int>       Positive minimum MB (default 5, or $GITSIZE_NEARDUP_MIN_MB)")
+	fmt.Fprintln(w, "  --generated=<bool>    Detect generated files (default true, or $GITSIZE_GENERATED=0/1)")
+	fmt.Fprintln(w, "  --generated-allow <glob>     Repeatable allowlist; overrides $GITSIZE_GENERATED_ALLOW and .gitsizeallow")
+	fmt.Fprintln(w, "  --generated-strict-weak=<bool>  Ask on weak matches (default false, or $GITSIZE_GENERATED_STRICT_WEAK=0/1)")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "'analyze' exits 0 for low or medium risk, 1 for high risk, 2 on error.")
 	fmt.Fprintln(w, "'hook' always exits 0 and prints a permission decision only when it has one.")
@@ -77,6 +80,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	pending := fs.Bool("pending", false, "Analyze everything `git add -A && git commit` would record")
 	warningMB, failureMB := thresholdFlags(fs)
 	nearDup := nearDupFlags(fs)
+	generated := generatedFlags(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -93,7 +97,8 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 
 	thresholds, err := resolveThresholds(fs, *warningMB, *failureMB)
 	cfg, nearDupErr := resolveNearDup(fs, nearDup)
-	err = errors.Join(err, nearDupErr)
+	generatedCfg, generatedErr := resolveGenerated(fs, generated)
+	err = errors.Join(err, nearDupErr, generatedErr)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -123,7 +128,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		sels = append(sels, analyzer.Selection{Dir: root, Kind: analyzer.KindPending})
 	}
 
-	report, err := analyzer.AnalyzeWithNearDup(sels, thresholds, cfg)
+	report, err := analyzer.AnalyzeWithConfig(sels, thresholds, cfg, generatedCfg)
 	if err != nil {
 		fmt.Fprintf(stderr, "analysis error: %v\n", err)
 		return 2

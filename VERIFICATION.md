@@ -771,3 +771,917 @@ Comparison: baseline names=14; observed failing leaves=14; new failures=0; basel
 **Result:** All three runs exited 1 with exactly the same 14 known baseline failing leaf tests and no new failures, data-race reports, or timeout/panic reports. This is a match to the baseline, not a clean full-suite pass.
 
 Full logs, per-run failure-name files, the orchestration script, and results.json remain outside Git in C:\Users\FC\.codex\visualizations\2026\10\20\01a15872-8472-7163-93c9-935b36159a26\triple-race-budget-2026-10-24. The baseline file was not modified or committed. **Live Claude Code session testing has not been performed.**
+
+## v0.4.0 verification — 2026-10-24
+
+**This version has not been tested in a live Claude Code session.** These are Go tests, simulated hook payloads, and plugin-manifest checks. Markdown output blocks normalize line endings and trailing blanks only; recorded messages and timings are unchanged, and the original raw logs remain outside Git. No live recording or interactive Claude Code behavior is claimed.
+
+The generated-file implementation and test-budget changes were exercised by the three consecutive full runs recorded below; their code is now committed on this branch through `3c45c38`. This documentation/version update changes no Go behavior. Production generated-file defaults remain **5 seconds / 5000 paths**. Large-tree and 12 MiB integration tests inject a 60-second budget; dedicated tests retain tiny-budget skip assertions. No assertions were weakened or deleted, and `baseline-failures-v0.4.txt` was neither edited nor committed.
+
+### Fresh generated-file integration and budget verification
+
+Exact command:
+
+~~~powershell
+go test -race -count=1 ./cmd/gitsize ./internal/analyzer -run '^(TestGeneratedReadOnlyIntegration|TestGeneratedBudgetDefaultsAndOverrides|TestGeneratedDefaultPathCap|TestGeneratedTinyTimeBudgetSkipsWithNote|TestGeneratedHookInjectedLimits|TestGeneratedHookTinyBudgetFailsOpen)$' -v
+~~~
+
+Exit `0`. Passing assertions cover one aggregated reason and an `ask` for 142 staged dependency files; a weak `dist/` note without risk escalation; HEAD-tracked-folder suppression; ignored force-adds becoming strong; the Go generated header supplied in a Write payload; silent allowlisting; both generated and near-duplicate reasons while risk remains medium; unchanged growth; and SHA-256 equality of every file under `.git` before and after analysis. The integration fixture for the combined advisories commits a deterministic 12 MiB original, changes a contiguous 5% region, and inserts 200 bytes into the copy.
+
+<details>
+<summary>Real combined stdout/stderr from the fresh focused run</summary>
+
+~~~text
+=== RUN   TestGeneratedHookInjectedLimits
+=== RUN   TestGeneratedHookInjectedLimits/large_tree_generous_deadline
+=== RUN   TestGeneratedHookInjectedLimits/injected_path_cap
+=== NAME  TestGeneratedHookInjectedLimits
+    generated_budget_test.go:50: git_unchanged=true files=27 (SHA-256 of every .git file)
+--- PASS: TestGeneratedHookInjectedLimits (4.88s)
+    --- PASS: TestGeneratedHookInjectedLimits/large_tree_generous_deadline (1.20s)
+    --- PASS: TestGeneratedHookInjectedLimits/injected_path_cap (1.55s)
+=== RUN   TestGeneratedHookTinyBudgetFailsOpen
+    generated_budget_test.go:81: exhausted generated budget: exit=0 stdout="" stderr=""; CLI skip note="Generated-file check skipped: time budget reached."
+    generated_budget_test.go:82: git_unchanged=true files=26 (SHA-256 of every .git file)
+--- PASS: TestGeneratedHookTinyBudgetFailsOpen (4.95s)
+=== RUN   TestGeneratedReadOnlyIntegration
+=== RUN   TestGeneratedReadOnlyIntegration/many_staged_dependencies_aggregate_once
+    generated_integration_test.go:228: git_unchanged=true files=27 (SHA-256 of every .git file)
+=== RUN   TestGeneratedReadOnlyIntegration/new_staged_dist_is_weak_note_only
+    generated_integration_test.go:228: git_unchanged=true files=27 (SHA-256 of every .git file)
+=== RUN   TestGeneratedReadOnlyIntegration/HEAD_tracked_dist_is_suppressed
+    generated_integration_test.go:228: git_unchanged=true files=31 (SHA-256 of every .git file)
+=== RUN   TestGeneratedReadOnlyIntegration/force_added_ignored_path_is_strong
+    generated_integration_test.go:228: git_unchanged=true files=28 (SHA-256 of every .git file)
+=== RUN   TestGeneratedReadOnlyIntegration/allowlisted_staged_dependencies_are_silent
+    generated_integration_test.go:228: git_unchanged=true files=28 (SHA-256 of every .git file)
+=== RUN   TestGeneratedReadOnlyIntegration/Write_Go_convention_header_comes_from_payload
+    generated_integration_test.go:252: git_unchanged=true files=26 (SHA-256 of every .git file)
+=== RUN   TestGeneratedReadOnlyIntegration/combined_advisories_stay_medium
+    generated_integration_test.go:299: git_unchanged=true files=30 (SHA-256 of every .git file)
+--- PASS: TestGeneratedReadOnlyIntegration (51.28s)
+    --- PASS: TestGeneratedReadOnlyIntegration/many_staged_dependencies_aggregate_once (6.63s)
+    --- PASS: TestGeneratedReadOnlyIntegration/new_staged_dist_is_weak_note_only (6.03s)
+    --- PASS: TestGeneratedReadOnlyIntegration/HEAD_tracked_dist_is_suppressed (6.28s)
+    --- PASS: TestGeneratedReadOnlyIntegration/force_added_ignored_path_is_strong (6.84s)
+    --- PASS: TestGeneratedReadOnlyIntegration/allowlisted_staged_dependencies_are_silent (6.22s)
+    --- PASS: TestGeneratedReadOnlyIntegration/Write_Go_convention_header_comes_from_payload (4.17s)
+    --- PASS: TestGeneratedReadOnlyIntegration/combined_advisories_stay_medium (15.10s)
+PASS
+ok  	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	64.274s
+=== RUN   TestGeneratedDefaultPathCap
+    generated_test.go:148: git_unchanged=true files=26 (SHA-256 of every .git file)
+--- PASS: TestGeneratedDefaultPathCap (1.78s)
+=== RUN   TestGeneratedBudgetDefaultsAndOverrides
+=== RUN   TestGeneratedBudgetDefaultsAndOverrides/production_defaults
+=== RUN   TestGeneratedBudgetDefaultsAndOverrides/negative_values_use_defaults
+=== RUN   TestGeneratedBudgetDefaultsAndOverrides/injected_limits
+--- PASS: TestGeneratedBudgetDefaultsAndOverrides (0.00s)
+    --- PASS: TestGeneratedBudgetDefaultsAndOverrides/production_defaults (0.00s)
+    --- PASS: TestGeneratedBudgetDefaultsAndOverrides/negative_values_use_defaults (0.00s)
+    --- PASS: TestGeneratedBudgetDefaultsAndOverrides/injected_limits (0.00s)
+=== RUN   TestGeneratedTinyTimeBudgetSkipsWithNote
+    generated_test.go:198: git_unchanged=true files=26 (SHA-256 of every .git file)
+--- PASS: TestGeneratedTinyTimeBudgetSkipsWithNote (2.96s)
+PASS
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	7.698s
+~~~
+
+</details>
+
+### Separate fail-open finding (unchanged)
+
+The fresh `TestGeneratedHookTinyBudgetFailsOpen` output above records:
+
+~~~text
+    generated_budget_test.go:81: exhausted generated budget: exit=0 stdout="" stderr=""; CLI skip note="Generated-file check skipped: time budget reached."
+~~~
+
+This deliberately exhausts the generated-file budget; it does not establish the cause of earlier intermittent failures. A skip note alone does not create a hook permission decision while measured size risk remains low. In `cmd/gitsize/hook.go`, Bash can return an empty decision, `runHook` writes JSON only for nonempty decisions, and the runner returns `0`. The shell shim in `hooks/pretooluse-gitsize.sh` also prints only successful nonempty binary output and then exits `0`. These fail-open decisions were not changed by the budget injection work; the limitation is documented in the README.
+
+### Three consecutive uncached full race runs
+
+These are the original three consecutive runs from the preceding verification step, with no intervening code edits or retries. They are not re-created or described as clean passes. Each ran exactly:
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+| Run | Go exit | Failing leaf tests | New vs v0.4 baseline | Race/panic/timeout/build markers |
+| --- | --- | --- | --- | --- |
+| 1 | 1 | 14 | 0 | 0 |
+| 2 | 1 | 14 | 0 | 0 |
+| 3 | 1 | 14 | 0 | 0 |
+
+#### Full run 1
+
+Started (UTC): `2026-10-24T14:11:49.2675570Z`. Finished (UTC): `2026-10-24T14:18:21.7389688Z`. Exit: `1`.
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+<details>
+<summary>Run 1: exact combined stdout/stderr and failing leaf names</summary>
+
+~~~text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (1.53s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (1.20s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (13.76s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.69s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (1.41s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (1.86s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	377.879s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	306.594s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.703s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.03s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.02s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	2.315s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	11.940s
+FAIL
+~~~
+
+Failing leaf test names extracted from this run:
+
+~~~text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+~~~
+
+</details>
+
+#### Full run 2
+
+Started (UTC): `2026-10-24T14:18:21.8362211Z`. Finished (UTC): `2026-10-24T14:25:02.5075642Z`. Exit: `1`.
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+<details>
+<summary>Run 2: exact combined stdout/stderr and failing leaf names</summary>
+
+~~~text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (1.34s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (1.53s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (13.79s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.95s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (2.39s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (2.52s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	385.307s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	310.292s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.937s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.03s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	2.067s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	12.805s
+FAIL
+~~~
+
+Failing leaf test names extracted from this run:
+
+~~~text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+~~~
+
+</details>
+
+#### Full run 3
+
+Started (UTC): `2026-10-24T14:25:02.5301124Z`. Finished (UTC): `2026-10-24T14:31:40.2712648Z`. Exit: `1`.
+
+~~~powershell
+go test -race -count=1 ./...
+~~~
+
+<details>
+<summary>Run 3: exact combined stdout/stderr and failing leaf names</summary>
+
+~~~text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (1.32s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (1.29s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (14.00s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.95s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (1.97s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (2.03s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	383.782s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	308.615s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.986s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.03s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	2.524s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	14.059s
+FAIL
+~~~
+
+Failing leaf test names extracted from this run:
+
+~~~text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+~~~
+
+</details>
+
+### Baseline comparison and integrity
+
+The following PowerShell commands were run against the saved outputs and the baseline outside Git. They exclude parent tests when failing subtests exist and compare the remaining leaf names.
+
+<details>
+<summary>Exact comparison commands</summary>
+
+~~~powershell
+$evidenceDir='C:\Users\FC\.codex\visualizations\2026\10\20\01a15872-8472-7163-93c9-935b36159a26\generated-triple-race'
+$baselinePath='C:\Users\FC\.codex\visualizations\2026\10\20\01a15872-8472-7163-93c9-935b36159a26\baseline-v0.4\baseline-failures-v0.4.txt'
+$baseline=@(Get-Content -LiteralPath $baselinePath)
+foreach ($runNumber in 1..3) {
+  $logPath=Join-Path $evidenceDir "run-$runNumber.txt"
+  $names=@(Get-Content -LiteralPath $logPath | ForEach-Object { if ($_ -match '^\s*--- FAIL: (\S+)') { $matches[1] } } | Sort-Object -Unique)
+  $leaves=@($names | Where-Object { $parent=$_; -not ($names | Where-Object { $_.StartsWith($parent+'/') }) })
+  $new=@($leaves | Where-Object { $_ -notin $baseline })
+  $absent=@($baseline | Where-Object { $_ -notin $leaves })
+  $markers=@(Select-String -LiteralPath $logPath -Pattern 'DATA RACE|panic:|fatal error:|test timed out|\[build failed\]|\[setup failed\]|^go: ')
+  "Run $runNumber : baseline=$($baseline.Count) failing_leaves=$($leaves.Count) new=$($new.Count) baseline_absent=$($absent.Count) race_panic_timeout_or_build_markers=$($markers.Count)"
+}
+$before=(Get-Content (Join-Path $evidenceDir 'baseline-sha256-before.txt') -Raw).Trim()
+$after=(Get-Content (Join-Path $evidenceDir 'baseline-sha256-after.txt') -Raw).Trim()
+$current=(Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash
+"Baseline SHA-256 before: $before"
+"Baseline SHA-256 after:  $after"
+"Baseline unchanged: $($before -eq $after -and $before -eq $current)"
+if ($before -ne $after -or $before -ne $current) { throw 'Baseline checksum mismatch.' }
+~~~
+
+</details>
+
+Real comparison output:
+
+~~~text
+Run 1 : baseline=14 failing_leaves=14 new=0 baseline_absent=0 race_panic_timeout_or_build_markers=0
+Run 2 : baseline=14 failing_leaves=14 new=0 baseline_absent=0 race_panic_timeout_or_build_markers=0
+Run 3 : baseline=14 failing_leaves=14 new=0 baseline_absent=0 race_panic_timeout_or_build_markers=0
+Baseline SHA-256 before: 90546130FC40C45EC1E13E9CB1B3AC4AD39D47276E81CB6C3EDFED51F419E085
+Baseline SHA-256 after:  90546130FC40C45EC1E13E9CB1B3AC4AD39D47276E81CB6C3EDFED51F419E085
+Baseline unchanged: True
+~~~
+
+The baseline and the full raw logs remain outside Git under the task's `baseline-v0.4` and `generated-triple-race` evidence directories. **All three full runs match exactly the 14 known Windows baseline failures from issue #2, with no new failures, data races, panics, or test timeouts. This is a baseline match, not a clean full-suite pass.**
+
+### Release metadata validation and formatting
+
+Exact command:
+
+~~~powershell
+claude plugin validate . --strict
+~~~
+
+Exit `0`; real output:
+
+~~~text
+Validating marketplace manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.claude-plugin\marketplace.json
+
+√ Validation passed
+~~~
+
+Exact command:
+
+~~~powershell
+gofmt -l .
+~~~
+
+Exit `0`, with empty stdout/stderr: no unformatted Go files were listed.
+
+The preceding three-run verification also ran `go vet ./...` with exit `0` and no stdout/stderr. Both plugin manifests now declare version `0.4.0`. Plugin validation is not a live Claude Code hook test. **Live Claude Code session testing has not been performed.**
+
+
+## v0.4.0 follow-up: tracked-file suppression and conservative rule tiers (2026-10-24)
+This has **not been tested in a live Claude Code session**. These are CLI, hook-payload, and temporary-repository tests on Windows. Production advisory limits remain 5 seconds and 5000 generated paths. No tests were removed or skipped, and the baseline file was not edited. Existing rule expectations were updated to the requested Weak tiers; all metadata, note, risk, growth, and read-only assertions remain.
+Exact HEAD paths are skipped before generated classification, ignore checks, and content reads. Git-detected staged renames from HEAD are also suppressed. New copies remain eligible; the existing zero-growth copy regression still asserts generated advice. The Taintwatch regressions cover a tracked root log, tracked `bin/README.md` and `bin/taintwatch-launcher`, a tracked source file receiving a generated marker, and an intentionally tracked dependency file, through staged, working-file, and Write analysis.
+### Vet, formatting, and regression checks
+```powershell
+go vet ./...
+gofmt -l .
+```
+Both exited 0 with empty output. The README relative-link check inspected 15 links and found none missing.
+Plugin validation (exit 0):
+
+```powershell
+claude plugin validate . --strict
+```
+
+```text
+Validating marketplace manifest: C:\Users\FC\Downloads\Claude-Plugin\gitsize-guard\.claude-plugin\marketplace.json
+
+√ Validation passed
+```
+Exact final tracked-file regression command and complete output (exit 0):
+```powershell
+go test -race -count=1 -v ./internal/analyzer -run "TestGeneratedTrackedFilesAreSilent|TestGeneratedTrackedRenamesAreSilent|TestGeneratedDetectionPreservesExactGrowth"
+```
+```text
+=== RUN   TestGeneratedDetectionPreservesExactGrowth
+--- PASS: TestGeneratedDetectionPreservesExactGrowth (1.31s)
+=== RUN   TestGeneratedTrackedFilesAreSilent
+=== RUN   TestGeneratedTrackedFilesAreSilent/race.log
+    generated_integration_test.go:216: git_unchanged=true files=30 (SHA-256 of every .git file)
+=== RUN   TestGeneratedTrackedFilesAreSilent/bin/README.md
+    generated_integration_test.go:216: git_unchanged=true files=31 (SHA-256 of every .git file)
+=== RUN   TestGeneratedTrackedFilesAreSilent/bin/taintwatch-launcher
+    generated_integration_test.go:216: git_unchanged=true files=31 (SHA-256 of every .git file)
+=== RUN   TestGeneratedTrackedFilesAreSilent/output.go
+    generated_integration_test.go:216: git_unchanged=true files=30 (SHA-256 of every .git file)
+=== RUN   TestGeneratedTrackedFilesAreSilent/node_modules/intentional.js
+    generated_integration_test.go:216: git_unchanged=true files=31 (SHA-256 of every .git file)
+--- PASS: TestGeneratedTrackedFilesAreSilent (10.40s)
+    --- PASS: TestGeneratedTrackedFilesAreSilent/race.log (2.09s)
+    --- PASS: TestGeneratedTrackedFilesAreSilent/bin/README.md (2.06s)
+    --- PASS: TestGeneratedTrackedFilesAreSilent/bin/taintwatch-launcher (2.07s)
+    --- PASS: TestGeneratedTrackedFilesAreSilent/output.go (2.07s)
+    --- PASS: TestGeneratedTrackedFilesAreSilent/node_modules/intentional.js (2.12s)
+=== RUN   TestGeneratedTrackedRenamesAreSilent
+=== RUN   TestGeneratedTrackedRenamesAreSilent/edited=false
+    generated_integration_test.go:252: git_unchanged=true files=29 (SHA-256 of every .git file)
+=== RUN   TestGeneratedTrackedRenamesAreSilent/edited=true
+    generated_integration_test.go:252: git_unchanged=true files=30 (SHA-256 of every .git file)
+--- PASS: TestGeneratedTrackedRenamesAreSilent (3.65s)
+    --- PASS: TestGeneratedTrackedRenamesAreSilent/edited=false (1.77s)
+    --- PASS: TestGeneratedTrackedRenamesAreSilent/edited=true (1.89s)
+PASS
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	17.033s
+```
+Broader focused command (exit 0):
+```powershell
+go test -race -count=1 -v ./internal/generated ./internal/analyzer ./cmd/gitsize -run "TestClassify|TestGenerated|TestHookOversizedStagedFileDeniesWithExpiredAdvisoryBudgets"
+```
+Actual output excerpt below includes the new Weak hook cases, package results, the retained low-risk budget fail-open reproduction, and the oversized-file denial. This focused run preceded the final tracked-file filtering refinement; the final regression command above and all three full runs below include that refinement.
+```text
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.784s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	84.398s
+    generated_budget_test.go:81: exhausted generated budget: exit=0 stdout="" stderr=""; CLI skip note="Generated-file check skipped: time budget reached."
+    generated_budget_test.go:103: hook exit=0
+        {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"gitsize-guard blocked this: it would add 3.0 MB to the repository (failure threshold 2.0 MB). This was measured before the command runs, so a fix made earlier in the same command (.gitignore, git lfs track, git rm --cached) isn't seen yet: run the fix as its own command, then retry.\nLargest additions:\n  - node_modules/large.bin: 3.0 MB (staged, binary)\nRecommendation: Track node_modules/large.bin with Git LFS (git lfs track \"*.bin\"), or keep it out of git (.gitignore) and store it in external artifact storage (S3, GCS, etc.).\nNear-duplicate discovery skipped: time budget reached.\nGenerated-file check skipped: time budget reached."}}
+    generated_budget_test.go:105: hook stderr=""
+    --- PASS: TestGeneratedReadOnlyIntegration/new_staged_log_is_weak_and_hook_stays_silent (3.23s)
+    --- PASS: TestGeneratedReadOnlyIntegration/new_staged_map_is_weak_and_hook_stays_silent (2.97s)
+    --- PASS: TestGeneratedReadOnlyIntegration/new_staged_minified_JS_is_weak_and_hook_stays_silent (3.18s)
+    --- PASS: TestGeneratedReadOnlyIntegration/new_staged_binary_is_weak_and_hook_stays_silent (3.00s)
+    --- PASS: TestGeneratedReadOnlyIntegration/new_staged_coverage_is_weak_and_hook_stays_silent (2.99s)
+ok  	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	110.689s
+```
+The hard denial remains `deny` for a staged 3 MiB file with a 2 MiB threshold and both advisory budgets set to 1 ns. Separately, expiration at low measured risk can still return empty stdout and exit 0; that behavior is unchanged and remains documented in README Limitations.
+### Read-only scan of three real repositories
+This calls the actual `internal/generated.Classify` for each path returned by `git ls-files -z`. It intentionally does **not** apply HEAD suppression or inspect content, so raw Weak matches below are distinct from pipeline findings. No files were staged or modified by the audit. Status bytes and SHA-256 maps of every file in each Git directory were compared immediately before and after each audit. The gitsize-guard worktree already contained this task's edits; its status was preserved, not clean. The other two worktrees remained clean.
+Exact harness commands (working directory is the external runner):
+```powershell
+$env:GOPROXY="off"
+$env:GOTOOLCHAIN="local"
+$env:GOWORK="off"
+go build -buildvcs=false -o "..\classify-paths.exe" .
+python "..\scan.py"
+```
+The external runner module imports `github.com/ratuhin1122/gitsize-guard/internal/generated` with a local module replacement to this working tree. For each repository the scanner runs `git ls-files -z` in that repository, with `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1`, then sends its NUL-separated path list as JSON to the classifier executable. Full raw audit output and before/after checksum manifests are retained outside Git in `tracked-path-audit-tightened`.
+| Real repository | Tracked files | Strong | Weak | Git files hashed | Status unchanged | .git unchanged |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| gitsize-guard | 64 | 0 | 0 | 337 | true | true |
+| Taintwatch | 347 | 0 | 5 | 1064 | true | true |
+| agentic-workspace-saas | 130 | 0 | 0 | 29 | true | true |
+
+**Strong paths:** none in any repository.
+
+**Weak paths (complete list):**
+- `Taintwatch/bin/README.md` — weak, rule `bin`.
+- `Taintwatch/bin/taintwatch-launcher` — weak, rule `bin`.
+- `Taintwatch/docs/measurements/m46/fuzz-valuematch-final.log` — weak, rule `*.log`.
+- `Taintwatch/docs/measurements/m46/race.log` — weak, rule `*.log`.
+- `Taintwatch/docs/measurements/m46/state-launcher.log` — weak, rule `*.log`.
+
+All five Taintwatch paths are intentional: the two `bin/` files document/implement its launcher, and its measurements README describes the three retained verification logs. The Weak path matches are heuristic hints, not evidence these files should be removed. During analysis the exact HEAD-path suppression means these tracked files receive **no generated annotation and no generated note**, including when modified.
+<details>
+<summary>Complete real tracked-path audit output</summary>
+
+```json
+{
+  "total_tracked_files": 64,
+  "strong": 0,
+  "weak": 0,
+  "matches": [],
+  "name": "gitsize-guard",
+  "repository": "C:\\Users\\FC\\Downloads\\Claude-Plugin\\gitsize-guard",
+  "command": "git ls-files -z",
+  "classifier": "github.com/ratuhin1122/gitsize-guard/internal/generated.Classify",
+  "raw_index_entries": 64,
+  "status_before": " M README.md\n M internal/analyzer/generated.go\n M internal/analyzer/generated_integration_test.go\n M internal/generated/generated.go\n M internal/generated/generated_test.go\n",
+  "status_after": " M README.md\n M internal/analyzer/generated.go\n M internal/analyzer/generated_integration_test.go\n M internal/generated/generated.go\n M internal/generated/generated_test.go\n",
+  "status_unchanged": true,
+  "git_sha256_unchanged": true,
+  "git_files_hashed": 337,
+  "content_rules_used": false,
+  "HEAD_suppression_used": false
+}
+{
+  "total_tracked_files": 347,
+  "strong": 0,
+  "weak": 5,
+  "matches": [
+    {
+      "path": "bin/README.md",
+      "category": "build-output",
+      "confidence": "weak",
+      "rule": "bin"
+    },
+    {
+      "path": "bin/taintwatch-launcher",
+      "category": "build-output",
+      "confidence": "weak",
+      "rule": "bin"
+    },
+    {
+      "path": "docs/measurements/m46/fuzz-valuematch-final.log",
+      "category": "logs",
+      "confidence": "weak",
+      "rule": "*.log"
+    },
+    {
+      "path": "docs/measurements/m46/race.log",
+      "category": "logs",
+      "confidence": "weak",
+      "rule": "*.log"
+    },
+    {
+      "path": "docs/measurements/m46/state-launcher.log",
+      "category": "logs",
+      "confidence": "weak",
+      "rule": "*.log"
+    }
+  ],
+  "name": "Taintwatch",
+  "repository": "C:\\Users\\FC\\Downloads\\Claude-Plugin\\Taintwatch",
+  "command": "git ls-files -z",
+  "classifier": "github.com/ratuhin1122/gitsize-guard/internal/generated.Classify",
+  "raw_index_entries": 347,
+  "status_before": "",
+  "status_after": "",
+  "status_unchanged": true,
+  "git_sha256_unchanged": true,
+  "git_files_hashed": 1064,
+  "content_rules_used": false,
+  "HEAD_suppression_used": false
+}
+{
+  "total_tracked_files": 130,
+  "strong": 0,
+  "weak": 0,
+  "matches": [],
+  "name": "agentic-workspace-saas",
+  "repository": "C:\\Users\\FC\\Downloads\\agentic-workspace-saas",
+  "command": "git ls-files -z",
+  "classifier": "github.com/ratuhin1122/gitsize-guard/internal/generated.Classify",
+  "raw_index_entries": 130,
+  "status_before": "",
+  "status_after": "",
+  "status_unchanged": true,
+  "git_sha256_unchanged": true,
+  "git_files_hashed": 29,
+  "content_rules_used": false,
+  "HEAD_suppression_used": false
+}
+```
+
+</details>
+### Three consecutive full race runs
+No Go source changed between these runs. Each command was `go test -race -count=1 ./...`; output was captured directly with stdout and stderr combined. Trailing whitespace is trimmed in these Markdown output blocks; the external raw logs are unchanged. Failing leaf names were collected from `--- FAIL:` lines after removing parent names that had failing descendants, then compared with the external `baseline-failures-v0.4.txt`. The baseline SHA-256 before and after was:
+
+`90546130fc40c45ec1e13e9cb1b3ac4ad39d47276e81cb6c3edfed51f419e085`
+
+| Run | Started (UTC) | Ended (UTC) | Exit | Known baseline leaf failures | New leaf failures | Race/panic/timeout/build problems |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 1 | 2026-10-24T15:52:26.815075+00:00 | 2026-10-24T15:56:20.325598+00:00 | 1 | 14 | 0 | 0 |
+| 2 | 2026-10-24T15:56:20.408005+00:00 | 2026-10-24T16:00:11.474098+00:00 | 1 | 14 | 0 | 0 |
+| 3 | 2026-10-24T16:00:11.516777+00:00 | 2026-10-24T16:03:50.839338+00:00 | 1 | 14 | 0 | 0 |
+
+<details>
+<summary>Run 1: complete real output and failing leaf names</summary>
+
+```powershell
+go test -race -count=1 ./...
+```
+
+```text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (0.70s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (0.75s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (8.56s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.58s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (0.90s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (1.30s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	221.591s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	191.022s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.627s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.03s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	0.890s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	10.182s
+FAIL
+```
+
+Failing leaf names recorded for this run:
+
+```text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+```
+
+</details>
+
+<details>
+<summary>Run 2: complete real output and failing leaf names</summary>
+
+```powershell
+go test -race -count=1 ./...
+```
+
+```text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (0.74s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (0.67s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (7.93s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.46s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (0.99s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (1.17s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	210.125s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	181.622s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.560s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.02s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	1.454s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	8.987s
+FAIL
+```
+
+Failing leaf names recorded for this run:
+
+```text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+```
+
+</details>
+
+<details>
+<summary>Run 3: complete real output and failing leaf names</summary>
+
+```powershell
+go test -race -count=1 ./...
+```
+
+```text
+--- FAIL: TestHookConfigErrorKeepsValidSettings (0.86s)
+    hook_test.go:246: want an ask at the kept 1 MB warning threshold with a configuration note; got
+--- FAIL: TestHookSurfacesConfigErrors (0.72s)
+    main_test.go:264: invalid GITSIZE_FAILURE_MB should be surfaced on git staging commands; got ""
+--- FAIL: TestShimNeverRunsRepositoryBinaries (7.86s)
+    shim_test.go:121: shim exited 127, want 0
+    shim_test.go:127: with no usable binary the shim should ask and say the guard is inactive; got ""
+--- FAIL: TestShimUsesGitsizeBinAndFailsOpen (0.52s)
+    shim_test.go:139: GITSIZE_BIN: exit 127, output ""; want 0 with the binary's decision
+    shim_test.go:147: crashing binary: exit 127, output ""; want 0 and no decision (fail open)
+--- FAIL: TestShimFallbackLooksOnlyAtTheCommand (1.21s)
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}: ask=false (output ""), want true
+    shim_test.go:173: payload {"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}: ask=false (output ""), want true
+--- FAIL: TestShimBuildsFromSource (1.23s)
+    shim_test.go:218: exit 127, output ""; want a deny naming big.bin
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/cmd/gitsize	208.151s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/analyzer	178.616s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/generated	1.512s
+?   	github.com/ratuhin1122/gitsize-guard/internal/hookio	[no test files]
+--- FAIL: TestSelections (0.03s)
+    --- FAIL: TestSelections/--work-tree (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir=/r/.git --work-tree=/r add -A")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[:/] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/--git-dir_of_a_.git_directory (0.00s)
+        shellcmd_test.go:123: Selections("git --git-dir /r/.git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/GIT_WORK_TREE_assignment (0.00s)
+        shellcmd_test.go:123: Selections("GIT_DIR=/r/.git GIT_WORK_TREE=/r git add y")
+             got: [{Dir:\work\repo\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+            want: [{Dir:\r Kind:0 Pathspecs:[y] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_absolute (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && git add .")
+             got: [{Dir:\work\repo\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:0 Pathspecs:[.] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/cd_home (0.00s)
+        shellcmd_test.go:123: Selections("cd ~/proj; git add x")
+             got: [{Dir:\work\repo\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+            want: [{Dir:\home\me\proj Kind:0 Pathspecs:[x] Force:false Renormalize:false}]
+    --- FAIL: TestSelections/indirect_after_cd (0.00s)
+        shellcmd_test.go:123: Selections("cd /other && xargs git add < list.txt")
+             got: [{Dir:\work\repo\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+            want: [{Dir:\other Kind:3 Pathspecs:[] Force:false Renormalize:false}]
+--- FAIL: TestParseUnseen (0.01s)
+    shellcmd_test.go:184: Parse("cat > /tmp/msg.txt <<'EOF'\nfix\nEOF\ngit add -A && git commit -F /tmp/msg.txt").Unseen = true, want false
+--- FAIL: TestParseUnresolved (0.00s)
+    shellcmd_test.go:213: Parse("cd \"$DIR\" && cd /abs && git add .").Unresolved = "git add after a cd whose target can't be determined", want ""
+FAIL
+FAIL	github.com/ratuhin1122/gitsize-guard/internal/shellcmd	1.530s
+ok  	github.com/ratuhin1122/gitsize-guard/internal/similarity	8.666s
+FAIL
+```
+
+Failing leaf names recorded for this run:
+
+```text
+TestHookConfigErrorKeepsValidSettings
+TestHookSurfacesConfigErrors
+TestParseUnresolved
+TestParseUnseen
+TestSelections/--git-dir_of_a_.git_directory
+TestSelections/--work-tree
+TestSelections/GIT_WORK_TREE_assignment
+TestSelections/cd_absolute
+TestSelections/cd_home
+TestSelections/indirect_after_cd
+TestShimBuildsFromSource
+TestShimFallbackLooksOnlyAtTheCommand
+TestShimNeverRunsRepositoryBinaries
+TestShimUsesGitsizeBinAndFailsOpen
+```
+
+</details>
+
+Comparison output (only failures outside the baseline):
+
+```json
+{
+  "1": {
+    "new_failures": [],
+    "runtime_problems": []
+  },
+  "2": {
+    "new_failures": [],
+    "runtime_problems": []
+  },
+  "3": {
+    "new_failures": [],
+    "runtime_problems": []
+  }
+}
+```
+
+This has **not been tested in a live Claude Code session**. No merge or release tag was created as part of this follow-up.

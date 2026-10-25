@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -19,7 +20,12 @@ var gitEnv = []string{"GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0"}
 // runGit runs git in dir with optional stdin and extra environment, and
 // returns stdout. Errors include git's stderr.
 func runGit(dir string, stdin []byte, env []string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
+	return runGitContext(context.Background(), dir, stdin, env, args...)
+}
+
+func runGitContext(ctx context.Context, dir string, stdin []byte, env []string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = 250 * time.Millisecond
 	cmd.Dir = dir
 	cmd.Env = append(append(os.Environ(), gitEnv...), env...)
 	if stdin != nil {
@@ -81,8 +87,14 @@ type stagedBlob struct {
 // stagedBlobs lists index entries that differ from HEAD (added, modified, or
 // type-changed) with the blob each would commit. Submodules are skipped.
 func stagedBlobs(root string) ([]stagedBlob, error) {
-	out, err := runGit(root, nil, nil, "diff", "--cached", "--raw", "-z", "--no-abbrev",
-		"--no-renames", "--no-color", "--no-ext-diff", "--ignore-submodules", "--diff-filter=AMT")
+	return stagedBlobsMatching(context.Background(), root, nil)
+}
+
+func stagedBlobsMatching(ctx context.Context, dir string, pathspecs []string) ([]stagedBlob, error) {
+	args := []string{"diff", "--cached", "--raw", "-z", "--no-abbrev", "--no-relative",
+		"--no-renames", "--no-color", "--no-ext-diff", "--ignore-submodules", "--diff-filter=AMT", "--"}
+	args = append(args, pathspecs...)
+	out, err := runGitContext(ctx, dir, nil, nil, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,11 +113,15 @@ func stagedBlobs(root string) ([]stagedBlob, error) {
 
 // objectSizes returns the size of each object id that exists.
 func objectSizes(dir string, env, ids []string) (map[string]int64, error) {
+	return objectSizesContext(context.Background(), dir, env, ids)
+}
+
+func objectSizesContext(ctx context.Context, dir string, env, ids []string) (map[string]int64, error) {
 	sizes := map[string]int64{}
 	if len(ids) == 0 {
 		return sizes, nil
 	}
-	out, err := runGit(dir, []byte(strings.Join(ids, "\n")+"\n"), env,
+	out, err := runGitContext(ctx, dir, []byte(strings.Join(ids, "\n")+"\n"), env,
 		"cat-file", "--batch-check=%(objectname) %(objectsize)")
 	if err != nil {
 		return nil, err
@@ -122,16 +138,26 @@ func objectSizes(dir string, env, ids []string) (map[string]int64, error) {
 	return sizes, nil
 }
 
+// listHeadTree is the shared read-only HEAD tree listing.
+func listHeadTree(ctx context.Context, root string) ([]byte, error) {
+	return runGitContext(ctx, root, nil, nil, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+}
+
 // readHead returns the set of blob ids in HEAD's tree. It reads only trees
 // (never blob contents), so it is cheap and needs no network in a partial
 // clone. An unborn HEAD, or a tree that cannot be read, yields an empty set,
 // so nothing is wrongly treated as already stored.
 func readHead(root string) map[string]bool {
 	blobs := map[string]bool{}
-	out, err := runGit(root, nil, nil, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+	out, err := listHeadTree(context.Background(), root)
 	if err != nil {
 		return blobs
 	}
+	return headBlobIDs(out)
+}
+
+func headBlobIDs(out []byte) map[string]bool {
+	blobs := map[string]bool{}
 	// Records are "<mode> <type> <id>" TAB <path>.
 	for _, rec := range bytes.Split(out, []byte{0}) {
 		meta, _, ok := bytes.Cut(rec, []byte{'\t'})

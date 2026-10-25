@@ -21,12 +21,23 @@ const (
 
 // FileImpact represents the size impact of a single file.
 type FileImpact struct {
+	generatedOnly bool           // supplemental staged entry; retained only if annotated
 	FilePath      string         `json:"file_path"`    // relative to the repository root
 	SizeBytes     int64          `json:"size_bytes"`   // size in the working tree (or of the staged blob)
 	GrowthBytes   int64          `json:"growth_bytes"` // bytes git would newly store; 0 if the content is already in HEAD
 	IsBinary      bool           `json:"is_binary"`
 	ChangeType    string         `json:"change_type"`
 	NearDuplicate *NearDuplicate `json:"near_duplicate,omitempty"`
+	Generated     *Generated     `json:"generated,omitempty"`
+}
+
+// Generated describes advisory evidence that a file is generated content.
+type Generated struct {
+	strictWeak         bool
+	Category           string `json:"category"`
+	Confidence         string `json:"confidence"`
+	Rule               string `json:"rule"`
+	IgnoredByGitignore bool   `json:"ignored_by_gitignore"`
 }
 
 // NearDuplicate describes advisory content overlap with another path in HEAD.
@@ -39,15 +50,17 @@ type NearDuplicate struct {
 
 // Report is the top-level JSON report produced by gitsize-guard.
 type Report struct {
-	RiskLevel      string       `json:"risk_level"` // "low", "medium", or "high"
-	GrowthBytes    int64        `json:"growth_bytes"`
-	FilesAnalyzed  int          `json:"files_analyzed"`
-	Files          []FileImpact `json:"files"`        // largest growth first, at most maxReportedFiles
-	LargestFile    *FileImpact  `json:"largest_file"` // nullable
-	Recommendation string       `json:"recommendation"`
-	Reasons        []string     `json:"reasons"`
-	NearDuplicates int          `json:"near_duplicates,omitempty"`
-	Notes          []string     `json:"notes,omitempty"`
+	RiskLevel           string         `json:"risk_level"` // "low", "medium", or "high"
+	GrowthBytes         int64          `json:"growth_bytes"`
+	FilesAnalyzed       int            `json:"files_analyzed"`
+	Files               []FileImpact   `json:"files"`        // largest growth first, at most maxReportedFiles
+	LargestFile         *FileImpact    `json:"largest_file"` // nullable
+	Recommendation      string         `json:"recommendation"`
+	Reasons             []string       `json:"reasons"`
+	NearDuplicates      int            `json:"near_duplicates,omitempty"`
+	GeneratedFiles      int            `json:"generated_files,omitempty"`
+	GeneratedByCategory map[string]int `json:"generated_by_category,omitempty"`
+	Notes               []string       `json:"notes,omitempty"`
 }
 
 // ToJSON marshals the report to indented JSON.
