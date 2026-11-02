@@ -39,7 +39,7 @@ const maxDepth = 4
 
 var (
 	gitRe  = regexp.MustCompile(`(?i)\bgit\b`) // case-insensitive so "$GIT" is looked at too
-	verbRe = regexp.MustCompile(`\b(add|stage|commit)\b`)
+	verbRe = regexp.MustCompile(`\b(add|stage|commit|update-index)\b`)
 	envRe  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 )
 
@@ -74,7 +74,7 @@ var builtins = map[string]bool{
 	"rev-parse": true, "revert": true, "rm": true, "shortlog": true, "show": true,
 	"show-branch": true, "show-ref": true, "sparse-checkout": true, "stash": true,
 	"status": true, "submodule": true, "switch": true, "symbolic-ref": true, "tag": true,
-	"update-index": true, "update-ref": true, "var": true, "version": true,
+	"update-ref": true, "var": true, "version": true,
 	"whatchanged": true, "worktree": true,
 }
 
@@ -237,6 +237,9 @@ func parse(p *Plan, command, cwd, home string, alias AliasFunc, depth int, st st
 					if expands && gitRe.MatchString(script) && verbRe.MatchString(script) {
 						widen(dir, false) // the outer shell expands $VAR and \ in it first
 					}
+					if gitRe.MatchString(script) {
+						st.index = true
+					}
 				} else {
 					if mentionsStaging(words) || (readsStdin(words[1:]) && gitRe.MatchString(command) && verbRe.MatchString(command)) {
 						widen(dir, hasForce(words)) // e.g. echo 'git add .' | bash
@@ -250,6 +253,28 @@ func parse(p *Plan, command, cwd, home string, alias AliasFunc, depth int, st st
 				if base != "find" || findRunsCommands(words) {
 					st = state{true, true}
 				}
+			case isInterpreter(base):
+				if script, ok := interpreterScript(base, words[1:]); ok {
+					if gitRe.MatchString(script) {
+						st.index = true
+						if verbRe.MatchString(script) {
+							widen(dir, false)
+						}
+					}
+					st.files = true
+				} else {
+					if mentionsStaging(words) {
+						widen(dir, hasForce(words))
+						st.index = true
+					}
+					st.files = true
+				}
+			case isWrapper(base, words[1:]):
+				if mentionsStaging(words) {
+					widen(dir, hasForce(words))
+					st.index = true
+				}
+				st.files = true
 			default:
 				if stagingTokens(words) {
 					widen(dir, hasForce(words)) // an unlisted wrapper: caffeinate git add x
@@ -438,6 +463,8 @@ func parseGit(args []word, dir string, env []word, alias AliasFunc, depth int) g
 		g.sels = parseAdd(rest, dir)
 	case "commit":
 		g.sels = parseCommit(rest, dir)
+	case "update-index":
+		g.sels = parseUpdateIndex(rest, dir)
 	case "rebase", "submodule", "bisect":
 		if mentionsStaging(rest) {
 			g.unresolved = "git " + sub + " running commands that stage or commit content"
@@ -488,7 +515,7 @@ func gitEffects(sub string, rest []word) (files, index bool) {
 		}
 	}
 	switch sub {
-	case "add", "stage":
+	case "add", "stage", "update-index":
 		return false, intentToAdd(rest) // i-t-a entries let a later commit -a stage anything
 	case "checkout", "switch":
 		if createsBranchOnly(sub, rest) {
@@ -517,7 +544,7 @@ func gitEffects(sub string, rest []word) (files, index bool) {
 		}
 		return true, true
 	case "am", "apply", "cherry-pick", "checkout-index", "merge", "pull", "read-tree",
-		"rebase", "reset", "restore", "revert", "update-index":
+		"rebase", "reset", "restore", "revert":
 		return true, true
 	case "rm": // can untrack files or remove .gitignore/.gitattributes
 		return true, false
@@ -752,6 +779,82 @@ func parseCommit(args []word, dir string) []analyzer.Selection {
 	return []analyzer.Selection{staged}
 }
 
+var updateIndexLongOpts = []string{
+	"--add", "--cacheinfo", "--chmod", "--stdin", "--index-info", "--remove",
+	"--force-remove", "--refresh", "--again", "--info-only", "--replace",
+}
+
+func parseUpdateIndex(args []word, dir string) []analyzer.Selection {
+	var specs []string
+	add := false
+	dynamic := false
+	opts := true
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		t := a.text
+		if opts && t == "--" {
+			opts = false
+			continue
+		}
+		if opts && strings.HasPrefix(t, "-") && t != "-" {
+			if a.dynamic {
+				dynamic = true
+				continue
+			}
+			if strings.HasPrefix(t, "--") {
+				name, val, hasValue := strings.Cut(t, "=")
+				switch expandLong(name, updateIndexLongOpts) {
+				case "--add":
+					add = true
+				case "--cacheinfo":
+					var info string
+					if hasValue {
+						info = val
+					} else if i+1 < len(args) {
+						i++
+						if args[i].dynamic {
+							dynamic = true
+							continue
+						}
+						info = args[i].text
+					}
+					parts := strings.Split(info, ",")
+					if len(parts) == 3 {
+						specs = append(specs, parts[2])
+					} else if len(parts) == 1 && i+2 < len(args) {
+						if args[i+1].dynamic || args[i+2].dynamic {
+							dynamic = true
+							i += 2
+							continue
+						}
+						i += 2
+						specs = append(specs, args[i].text)
+					}
+				case "--stdin", "--index-info":
+					dynamic = true
+				}
+				continue
+			}
+			continue
+		}
+		if a.dynamic {
+			dynamic = true
+			continue
+		}
+		specs = append(specs, t)
+	}
+	if dynamic {
+		return []analyzer.Selection{pending(dir)}
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	if add || len(specs) > 0 {
+		return []analyzer.Selection{{Dir: dir, Kind: analyzer.KindPaths, Pathspecs: specs}}
+	}
+	return nil
+}
+
 // expandLong resolves an unambiguous abbreviation of a long option, as git's
 // option parser does.
 func expandLong(name string, opts []string) string {
@@ -932,7 +1035,87 @@ func stagingVerb(words []word) bool {
 }
 
 func isVerb(s string) bool {
-	return s == "add" || s == "stage" || s == "commit"
+	return s == "add" || s == "stage" || s == "commit" || s == "update-index"
+}
+
+var interpreters = map[string]bool{
+	"python": true, "python3": true, "node": true, "ruby": true, "perl": true, "php": true,
+}
+
+func isInterpreter(base string) bool {
+	return interpreters[base] || strings.HasPrefix(base, "python3.") || strings.HasPrefix(base, "python2.")
+}
+
+func interpreterScript(base string, args []word) (string, bool) {
+	var flagShort, flagLong string
+	switch {
+	case base == "python" || base == "python3" || strings.HasPrefix(base, "python3.") || strings.HasPrefix(base, "python2."):
+		flagShort = "c"
+	case base == "node":
+		flagShort = "ep"
+		flagLong = "--eval"
+	case base == "ruby":
+		flagShort = "e"
+	case base == "perl":
+		flagShort = "eE"
+	case base == "php":
+		flagShort = "r"
+	default:
+		return "", false
+	}
+	for i := 0; i < len(args); i++ {
+		t := args[i].text
+		if args[i].dynamic {
+			return "", false
+		}
+		if t == "--" {
+			break
+		}
+		if flagLong != "" && (t == flagLong || t == "--print") {
+			if i+1 < len(args) && !args[i+1].dynamic {
+				return args[i+1].text, true
+			}
+			return "", false
+		}
+		if flagLong != "" && (strings.HasPrefix(t, flagLong+"=") || strings.HasPrefix(t, "--print=")) {
+			_, val, _ := strings.Cut(t, "=")
+			return val, true
+		}
+		if strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "--") && len(t) > 1 {
+			for idx, r := range t[1:] {
+				if strings.ContainsRune(flagShort, r) {
+					rem := t[1+idx+1:]
+					if rem != "" {
+						if strings.HasPrefix(rem, "=") {
+							return rem[1:], true
+						}
+						return rem, true
+					}
+					if i+1 < len(args) && !args[i+1].dynamic {
+						return args[i+1].text, true
+					}
+					return "", false
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func isWrapper(base string, args []word) bool {
+	if base == "make" || base == "npx" {
+		return true
+	}
+	switch base {
+	case "npm", "yarn", "pnpm":
+		for _, a := range args {
+			if strings.HasPrefix(a.text, "-") {
+				continue
+			}
+			return a.text == "run"
+		}
+	}
+	return false
 }
 
 // commandIsSafe reports whether a non-git command leaves working-tree files
@@ -965,6 +1148,18 @@ func commandIsSafe(base string, words []word) bool {
 			return false
 		}
 		return true
+	case "npm", "yarn", "pnpm":
+		for _, a := range args {
+			if strings.HasPrefix(a.text, "-") {
+				continue
+			}
+			switch a.text {
+			case "test", "t":
+				return true
+			}
+			return false
+		}
+		return false
 	}
 	return safeCommands[base]
 }

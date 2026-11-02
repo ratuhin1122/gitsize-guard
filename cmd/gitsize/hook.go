@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -56,9 +57,18 @@ func runHookWithBudgets(args []string, stdin io.Reader, stdout, stderr io.Writer
 		fmt.Fprintf(stderr, "gitsize-guard: %v\n", configErr)
 	}
 
-	in, err := hookio.Read(stdin)
+	raw, readErr := io.ReadAll(stdin)
+	in, err := hookio.Read(bytes.NewReader(raw))
 	if err != nil {
+		if readErr != nil {
+			err = errors.Join(err, readErr)
+		}
 		fmt.Fprintf(stderr, "gitsize-guard: %v\n", err)
+		if containsGitStaging(string(raw)) {
+			if writeErr := hookio.WriteDecision(stdout, hookio.Ask, "gitsize-guard could not run: the hook payload was malformed, but the command appears to stage or commit with git. This git command was not size-checked."); writeErr != nil {
+				fmt.Fprintf(stderr, "gitsize-guard: %v\n", writeErr)
+			}
+		}
 		return 0
 	}
 
@@ -393,4 +403,17 @@ func describe(r *analyzer.Report, th analyzer.Thresholds, v verdict) string {
 		fmt.Fprintf(&b, "\n%s", note)
 	}
 	return b.String()
+}
+
+var (
+	bashToolPattern   = regexp.MustCompile(`"tool_name"\s*:\s*"Bash"`)
+	gitCmdPattern     = regexp.MustCompile(`(?i)(?:^|[^a-zA-Z0-9_.-])git(?:[^a-zA-Z0-9_-]|$)`)
+	gitStagingPattern = regexp.MustCompile(`(?:^|[^a-zA-Z0-9_-])(add|stage|commit|update-index)(?:[^a-zA-Z0-9_-]|$)`)
+)
+
+func containsGitStaging(raw string) bool {
+	if !bashToolPattern.MatchString(raw) {
+		return false
+	}
+	return gitCmdPattern.MatchString(raw) && gitStagingPattern.MatchString(raw)
 }

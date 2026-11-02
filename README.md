@@ -292,23 +292,25 @@ Per-file `generated` metadata contains `category`, `confidence` (`strong` or `we
 
 ## Limitations
 
-- Only Claude Code **Bash and Write tool calls** trigger the hook. Manual Git commits and the `Edit` tool bypass it. For external commits, consider a separate pre-commit check using `gitsize analyze --staged`.
+- Only Claude Code **Bash and Write tool calls** trigger the hook. Manual Git commits and the `Edit` tool bypass it (the `Edit` tool is not hooked). For external commits, consider a separate pre-commit check using `gitsize analyze --staged`.
 - Bash detection uses **static, best-effort parsing**. Ambiguous selections are estimated from pending files and prompt for confirmation.
 - Duplicate detection compares against **HEAD only**, not other staged files or older history.
 - Already-compressed ZIP, MP4, and some model formats may share few chunks despite semantic similarity. Chunk overlap does not replace Git's pack delta compression.
-- The hook **can fail open (empty stdout, exit `0`)**. The [shell shim](hooks/pretooluse-gitsize.sh) prints only successful, nonempty binary output and then exits `0`; a failed or timed-out binary can therefore leave no permission decision. Invalid hook JSON also produces no decision: the [Go runner](cmd/gitsize/hook.go) logs the decode error to stderr and returns `0`.
+- The hook **fails open for non-git commands and other tools (empty stdout, exit `0`)**. For git staging commands, a crashing, missing, or inactive binary, or malformed JSON, surfaces an `ask` confirmation. If a check runs past Claude Code's 30-second hook timeout, Claude Code stops the hook and the action may proceed unchecked. The shim cannot catch this.
+- An `ask` decision requires interactive user confirmation and stalls in headless or non-interactive runs.
+- `git merge`, `cherry-pick`, `am`, `revert`, and `commit-tree` can create commits without a separate checked `git commit`.
+- Non-LFS clean filters run during analysis in a temporary object directory, but their own commands can have side effects.
 - If a near-duplicate or generated-file deadline expires while measured size risk is low, the skip note stays in the CLI report and does not itself trigger an `ask`. The [tiny-budget regression test](cmd/gitsize/generated_budget_test.go) reproduces exit `0` with both stdout and stderr empty. **A budget skip does not override a completed size-based warning or denial.** This reproduction does not establish why the earlier oversized-file check returned no decision; that cause remains unresolved.
 - Windows test-suite gaps are tracked in [issue #2](https://github.com/ratuhin1122/gitsize-guard/issues/2). See [VERIFICATION.md](VERIFICATION.md) for recorded checks.
-- **Not yet tested in a live Claude Code session.** The demo remains a placeholder.
+- **Confirmed in a live Claude Code session by an independent tester on Linux (v0.4.0).**
 
 <details>
 <summary>Additional bypasses and failure modes</summary>
 
 - Missing or inaccessible working directories can yield no decision because repository lookup errors are treated as selections outside a Git work tree. Earlier intermittent empty decisions were not conclusively traced to machine load.
-- If no binary is available, staging commands receive an `ask` explaining that the guard is inactive. A crashing or timed-out binary instead fails open.
+- If no binary is available or the binary crashes/produces no output, staging commands receive an `ask`. Unrelated commands and tools fail open.
 - Opaque scripts (`bash release.sh`), `make`, and npm scripts that call Git internally are not inspected. They are assumed to change files, but not the index; `npm run build && git commit -m x` is therefore not blocked as a compound mutation.
-- `git merge`, `cherry-pick`, `am`, `revert`, and `commit-tree` can create commits without a separate checked `git commit`.
-- Content placed in the index by those operations, `git apply --cached`, `git stash pop`, or `git update-index` is checked by a later `git commit`; known index mutations followed by commit in the same command are denied.
+- Content placed in the index by operations such as `git apply --cached`, `git stash pop`, or `git update-index` is checked by a later `git commit`; known index mutations followed by commit in the same command are denied.
 - Each `git add` is judged separately. Multiple approved additions can still produce a denied combined commit.
 - Non-LFS filters execute in a temporary object directory, but their own commands can have side effects. Older Git versions can still fetch trees in partial clones (see requirements).
 

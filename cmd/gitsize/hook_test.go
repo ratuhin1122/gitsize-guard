@@ -246,3 +246,59 @@ func TestHookConfigErrorKeepsValidSettings(t *testing.T) {
 		t.Errorf("want an ask at the kept 1 MB warning threshold with a configuration note; got %s", out)
 	}
 }
+
+func TestHookMalformedJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantAsk bool
+	}{
+		{
+			name:    "git add asks",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"git add big.bin"`,
+			wantAsk: true,
+		},
+		{
+			name:    "git commit asks",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"git commit -m msg"`,
+			wantAsk: true,
+		},
+		{
+			name:    "git stage asks",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"git stage file"`,
+			wantAsk: true,
+		},
+		{
+			name:    "git update-index asks",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"git update-index --add file"`,
+			wantAsk: true,
+		},
+		{
+			name:    "non-git passes silently",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"ls -la"`,
+			wantAsk: false,
+		},
+		{
+			name:    "write tool passes silently",
+			payload: `{"tool_name":"Write","tool_input":{"file_path":"git-add.txt"`,
+			wantAsk: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"hook"}, strings.NewReader(tc.payload), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("hook exited %d, want 0", code)
+			}
+			out := stdout.String()
+			gotAsk := strings.Contains(out, `"ask"`)
+			if gotAsk != tc.wantAsk {
+				t.Fatalf("malformed JSON gotAsk=%v, want %v (output: %q)", gotAsk, tc.wantAsk, out)
+			}
+			if tc.wantAsk && !strings.Contains(out, "could not run") {
+				t.Errorf("expected reason to contain 'could not run', got %q", out)
+			}
+		})
+	}
+}

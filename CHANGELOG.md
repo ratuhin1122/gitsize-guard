@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.1
+
+- Fix interpreter and script wrapper bypass: when an interpreter or runner (`python`, `python3`, `node`, `ruby`, `perl`, `php`, `sh -c`, `bash -c`, `make`, `npm run`, `yarn run`, `pnpm run`, `npx`) is followed in the same command line by `git add`, `git commit`, `git stage`, or `git update-index`, treat index mutations as unseen so the hook denies compound staging.
+- Quoted script arguments (such as `python3 -c "..."` or `node -e "..."`) that contain the word `git` now count as potential index mutations.
+- Support `git update-index --add` and `--cacheinfo` forms during shell command parsing.
+- Add hook fail-safe: when the gitsize binary crashes or produces no output on a command that stages or commits with Git, emit an `ask` decision instead of silently failing open.
+- Emit an `ask` decision when reading a malformed hook JSON payload on Git staging commands. Unrelated commands and tools continue to fail open.
+- Fix multi-line JSON payload command extraction in the shell shim fallback using standard POSIX `tr` whitespace flattening.
+- Update documentation limitations to note hook timeout behaviors, non-git fail-open semantics, and confirmation in a live session on Linux.
+
 ## v0.4.0
 
 - Skip generated-file classification for exact HEAD paths and Git-detected staged renames, including modified logs, launcher scripts, and content markers; retain detection for new copies.
