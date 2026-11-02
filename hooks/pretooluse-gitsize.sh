@@ -16,9 +16,9 @@
 # environment and workspace, and is redone when this checkout's source
 # content changes.
 #
-# Fails open: if the binary crashes or times out, the tool call proceeds. If
-# no binary can be found or built at all, git staging commands get an "ask"
-# decision saying the guard is inactive, rather than silently passing.
+# If the binary crashes, times out, or cannot be found or built, git staging
+# commands get an "ask" decision rather than silently passing. Other commands
+# and tools fail open.
 # ==============================================================================
 
 set -u
@@ -125,19 +125,38 @@ else
   GITSIZE=""
 fi
 
+is_git_staging_command() {
+  if ! printf '%s' "$PAYLOAD" | tr '\r\n\t' '   ' | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"Bash"'; then
+    return 1
+  fi
+  local flat cmd
+  flat="$(printf '%s' "$PAYLOAD" | tr '\r\n\t' '   ')"
+  cmd="$(printf '%s' "$flat" | sed -nE 's/.*"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' | sed 's/\\[ntr]/ /g')"
+  if [ -z "$cmd" ]; then
+    cmd="${flat#*\"command\"}"
+  fi
+  if printf '%s' "$cmd" | grep -Eqi '(^|[^[:alnum:]_.-])git([^[:alnum:]_-]|$)' &&
+    printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_-])(add|stage|commit|update-index)([^[:alnum:]_-]|$)'; then
+    return 0
+  fi
+  return 1
+}
+
 if [ -z "$GITSIZE" ]; then
-  if printf '%s' "$PAYLOAD" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"Bash"'; then
-    CMD="$(printf '%s' "$PAYLOAD" | sed -nE 's/.*"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' | head -n 1 |
-      sed 's/\\[ntr]/ /g')"
-    if printf '%s' "$CMD" | grep -Eqi '(^|[^[:alnum:]_.-])git([^[:alnum:]_-]|$)' &&
-      printf '%s' "$CMD" | grep -Eq '(^|[^[:alnum:]_-])(add|stage|commit)([^[:alnum:]_-]|$)'; then
-      printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"gitsize-guard is installed but inactive: no gitsize binary was found or could be built. Install Go 1.22+ so the plugin can build one, or set GITSIZE_BIN to an absolute path. This git command was not size-checked."}}'
-    fi
+  if is_git_staging_command; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"gitsize-guard is installed but inactive: no gitsize binary was found or could be built. Install Go 1.22+ so the plugin can build one, or set GITSIZE_BIN to an absolute path. This git command was not size-checked."}}'
   fi
   exit 0
 fi
 
-if OUT="$(printf '%s' "$PAYLOAD" | "$GITSIZE" hook)" && [ -n "$OUT" ]; then
-  printf '%s\n' "$OUT"
+if OUT="$(printf '%s' "$PAYLOAD" | "$GITSIZE" hook 2>/dev/null)"; then
+  if [ -n "$OUT" ]; then
+    printf '%s\n' "$OUT"
+  fi
+  exit 0
+fi
+
+if is_git_staging_command; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"gitsize-guard could not run: the gitsize binary crashed or produced no output. This git command was not size-checked."}}'
 fi
 exit 0

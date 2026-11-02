@@ -143,8 +143,21 @@ func TestShimUsesGitsizeBinAndFailsOpen(t *testing.T) {
 	writeScript(t, crash, `cat >/dev/null; echo 'panic: boom' >&2; echo partial; exit 2`)
 	env[1] = "GITSIZE_BIN=" + crash
 	out, code = runShim(t, thisShim(t), dir, env, bashPayload("git add x"))
+	if code != 0 || !strings.Contains(out, `"ask"`) || !strings.Contains(out, "could not run") {
+		t.Errorf("crashing binary on git staging: exit %d, output %q; want 0 and ask decision", code, out)
+	}
+
+	empty := filepath.Join(dir, "empty")
+	writeScript(t, empty, `cat >/dev/null; exit 2`)
+	env[1] = "GITSIZE_BIN=" + empty
+	out, code = runShim(t, thisShim(t), dir, env, bashPayload("git add x"))
+	if code != 0 || !strings.Contains(out, `"ask"`) || !strings.Contains(out, "could not run") {
+		t.Errorf("empty output binary on git staging: exit %d, output %q; want 0 and ask decision", code, out)
+	}
+
+	out, code = runShim(t, thisShim(t), dir, env, bashPayload("ls -la"))
 	if code != 0 || out != "" {
-		t.Errorf("crashing binary: exit %d, output %q; want 0 and no decision (fail open)", code, out)
+		t.Errorf("crashing binary on non-git command: exit %d, output %q; want 0 and no decision (fail open)", code, out)
 	}
 }
 
@@ -165,6 +178,9 @@ func TestShimFallbackLooksOnlyAtTheCommand(t *testing.T) {
 		{`{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"/src/git/commitizen"}`, false},
 		{`{"tool_name":"Bash","tool_input":{"command":"git -C \"my dir\" add big.bin"}}`, true},
 		{`{"tool_name":"Bash","tool_input":{"command":"cd sub\ngit add big.bin"}}`, true},
+		{"{\n  \"tool_name\": \"Bash\",\n  \"tool_input\": {\n    \"command\":\n      \"git add big.bin\"\n  }\n}", true},
+		{"{\n  \"tool_name\": \"Bash\",\n  \"tool_input\": {\n    \"command\": \"python3 -c '...' &&\\n  git update-index --add model.bin\"\n  }\n}", true},
+		{"{\n  \"tool_name\": \"Bash\",\n  \"tool_input\": {\n    \"command\":\n      \"ls -la\"\n  }\n}", false},
 		{`{"tool_name":"Write","tool_input":{"file_path":"git-add.txt","content":"x"}}`, false},
 	}
 	for _, tc := range tests {

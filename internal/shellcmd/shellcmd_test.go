@@ -115,6 +115,12 @@ func TestSelections(t *testing.T) {
 		{"env with options", "env -u FOO git add big.bin", []analyzer.Selection{pending(cwd)}},
 		{"cd to the toplevel", `cd "$(git rev-parse --show-toplevel)" && git add src/a.go docs`, []analyzer.Selection{paths(cwd, ":/src/a.go", ":/docs")}},
 		{"cd to the toplevel, then dot", "cd $(git rev-parse --show-toplevel) && git add .", []analyzer.Selection{paths(cwd, ":/")}},
+		{"update-index --add single file", "git update-index --add model.bin", []analyzer.Selection{paths(cwd, "model.bin")}},
+		{"update-index --add multiple files", "git update-index --add a.bin b.bin", []analyzer.Selection{paths(cwd, "a.bin", "b.bin")}},
+		{"update-index --cacheinfo 3 args", "git update-index --cacheinfo 100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 model.bin", []analyzer.Selection{paths(cwd, "model.bin")}},
+		{"update-index --cacheinfo comma", "git update-index --cacheinfo 100644,e69de29bb2d1d6434b8b29ae775ad8c2e48c5391,model.bin", []analyzer.Selection{paths(cwd, "model.bin")}},
+		{"update-index --cacheinfo=", "git update-index --cacheinfo=100644,e69de29bb2d1d6434b8b29ae775ad8c2e48c5391,model.bin", []analyzer.Selection{paths(cwd, "model.bin")}},
+		{"update-index --add dynamic", `git update-index --add "$FILE"`, []analyzer.Selection{pending(cwd)}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -178,6 +184,26 @@ func TestParseUnseen(t *testing.T) {
 		{"git archive -o out.zip HEAD && git add out.zip", true},
 		{"sort -o f.txt f.txt && git add f.txt", true},
 		{"go build -o bin/tool . && git add -f bin/tool", true},
+		// Interpreters and wrappers followed by git staging or commit.
+		{`python -c "import os; os.system('git add .')" && git commit -m x`, true},
+		{`python3 -c "import subprocess; subprocess.run(['git','add','model.bin'])" && git commit -m 'add model'`, true},
+		{`node -e "require('child_process').execSync('git add .')" && git commit -m x`, true},
+		{`ruby -e "system('git add .')" && git commit -m x`, true},
+		{`perl -e "system('git', 'add', '.')" && git commit -m x`, true},
+		{`php -r "exec('git add .');" && git commit -m x`, true},
+		{`sh -c "git add ." && git commit -m x`, true},
+		{`bash -c "git add ." && git commit -m x`, true},
+		{"make && git add .", true},
+		{"npm run build && git update-index --add model.bin", true},
+		{"yarn run build && git add .", true},
+		{"pnpm run build && git add .", true},
+		{"npx prettier --write . && git add .", true},
+		// Negative tests: test commands before commit without staging large content.
+		{"go test ./... && git commit -m x", false},
+		{"npm test && git commit", false},
+		// Update-index in Unseen checks.
+		{"git update-index --add model.bin && git commit -m x", false},
+		{"dd if=/dev/zero of=m.bin bs=1M count=1 && git update-index --add m.bin", true},
 	}
 	for _, tc := range tests {
 		if got := Parse(tc.cmd, cwd, home, nil).Unseen; got != tc.want {

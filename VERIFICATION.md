@@ -1685,3 +1685,59 @@ Comparison output (only failures outside the baseline):
 ```
 
 This has **not been tested in a live Claude Code session**. No merge or release tag was created as part of this follow-up.
+
+## v0.4.1 verification — 2026-11-03
+
+### Interpreter bypass and fail-safe verification
+
+- **Fix verified**: Shell command parser marks compound mutations as unseen when script interpreters (`python`, `python3`, `node`, `ruby`, `perl`, `php`, `sh -c`, `bash -c`, `make`, `npm/yarn/pnpm run`, `npx`) are chained with `git add`, `git commit`, `git stage`, or `git update-index`.
+- **Read-only integrity**: SHA-256 snapshots taken of every file in `.git` before and after running `TestInterpreterBypass` confirm repository contents are untouched (`git_unchanged=true files=26`).
+- **Fail-safe hook**: Shim and runner emit `ask` decisions on crashes, empty output, or malformed JSON for Git staging operations, while non-Git operations and unrelated tools fail open.
+- **Plugin validation**: `claude plugin validate . --strict` succeeded with exit code 0 (`√ Validation passed`).
+- **gofmt**: `gofmt -l .` reports no unformatted files.
+
+### Three consecutive full race runs
+
+Each run executed `go test -race -count=1 ./...` and compared failing leaves against `baseline-failures-v0.4.1.txt`.
+
+| Run | Exit | Known baseline leaf failures | New leaf failures | Race/panic/timeout problems |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1 | 14 | 0 | 0 |
+| 2 | 1 | 14 | 0 | 0 |
+| 3 | 1 | 14 | 0 | 0 |
+
+Failing leaf names recorded across all runs (identical to baseline):
+- `TestHookConfigErrorKeepsValidSettings`
+- `TestHookSurfacesConfigErrors`
+- `TestParseUnresolved`
+- `TestParseUnseen`
+- `TestSelections/--git-dir_of_a_.git_directory`
+- `TestSelections/--work-tree`
+- `TestSelections/GIT_WORK_TREE_assignment`
+- `TestSelections/cd_absolute`
+- `TestSelections/cd_home`
+- `TestSelections/indirect_after_cd`
+- `TestShimBuildsFromSource`
+- `TestShimFallbackLooksOnlyAtTheCommand`
+- `TestShimNeverRunsRepositoryBinaries`
+- `TestShimUsesGitsizeBinAndFailsOpen`
+
+Comparison output (only failures outside the baseline):
+
+```json
+{
+  "1": {
+    "new_failures": [],
+    "runtime_problems": []
+  },
+  "2": {
+    "new_failures": [],
+    "runtime_problems": []
+  },
+  "3": {
+    "new_failures": [],
+    "runtime_problems": []
+  }
+}
+```
+
